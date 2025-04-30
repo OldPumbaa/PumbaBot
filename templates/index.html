@@ -22,11 +22,14 @@
                     {% if ticket.file_type == 'image' %}
                     <img src="/{{ ticket.file_path }}" alt="{{ ticket.file_name }}" class="inline h-6 w-6">
                     {% else %}
-                    <svg class="inline h-6 w-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9l-7-7H7a2 2 0 00-2 2v16a2 2 0 002 2z"></path>
-                    </svg>
+                    <a href="/{{ ticket.file_path }}" class="inline-block text-blue-500 underline">
+                        {% if ticket.file_name|length > 20 %}
+                        {{ ticket.file_name[:17] + '...' }}
+                        {% else %}
+                        {{ ticket.file_name }}
+                        {% endif %}
+                    </a>
                     {% endif %}
-                    {{ ticket.file_name }}
                 </span>
                 {% endif %}
             </p>
@@ -38,6 +41,14 @@
         {% endfor %}
     </div>
     <script>
+        function shortenFilename(filename) {
+            if (!filename) return 'unknown';
+            if (filename.length > 20) {
+                return filename.substring(0, 17) + '...';
+            }
+            return filename;
+        }
+
         const socket = io('http://localhost:8080');
 
         socket.on('connect', () => {
@@ -46,10 +57,6 @@
 
         socket.on('connect_error', (error) => {
             console.error('Ошибка подключения к SocketIO:', error);
-        });
-
-        document.getElementById("cleanupBtn").addEventListener("click", () => {
-            fetch("/cleanup", { method: 'POST' }).then(() => location.reload());
         });
 
         socket.on("update_tickets", (data) => {
@@ -67,13 +74,10 @@
                         ${data.file_type ? `
                             <span class="inline-block">
                                 ${data.file_type === 'image' ? `
-                                    <img src="/${data.file_path}" alt="${data.file_name}" class="inline h-6 w-6">
+                                    <img src="/${data.file_path || ''}" alt="${data.file_name || 'image'}" class="inline h-6 w-6">
                                 ` : `
-                                    <svg class="inline h-6 w-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9l-7-7H7a2 2 0 00-2 2v16a2 2 0 002 2z"></path>
-                                    </svg>
+                                    <a href="/${data.file_path || ''}" class="inline-block text-blue-500 underline">${shortenFilename(data.file_name)}</a>
                                 `}
-                                ${data.file_name}
                             </span>
                         ` : ''}
                     </p>
@@ -95,6 +99,10 @@
 
         socket.on("new_message", (data) => {
             console.log('Новое сообщение:', data);
+            if (!data.ticket_id || !data.text || !data.timestamp) {
+                console.error('Некорректные данные сообщения:', data);
+                return;
+            }
             const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
             if (ticketDiv) {
                 const messageP = ticketDiv.querySelector('.text-sm');
@@ -107,19 +115,20 @@
                             ${data.file_type ? `
                                 <span class="inline-block">
                                     ${data.file_type === 'image' ? `
-                                        <img src="/${data.file_path}" alt="${data.file_name}" class="inline h-6 w-6">
+                                        <img src="/${data.file_path || ''}" alt="${data.file_name || 'image'}" class="inline h-6 w-6">
                                     ` : `
-                                        <svg class="inline h-6 w-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9l-7-7H7a2 2 0 00-2 2v16a2 2 0 002 2z"></path>
-                                        </svg>
+                                        <a href="/${data.file_path || ''}" class="inline-block text-blue-500 underline">${shortenFilename(data.file_name)}</a>
                                     `}
-                                    ${data.file_name}
                                 </span>
                             ` : ''}
                         `;
                     }
                 }
             }
+        });
+
+        document.getElementById("cleanupBtn").addEventListener("click", () => {
+            fetch("/cleanup", { method: 'POST' }).then(() => location.reload());
         });
     </script>
 </body>

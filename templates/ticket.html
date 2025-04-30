@@ -23,7 +23,13 @@
                 {% if message.file_type == 'image' %}
                 <img src="/{{ message.file_path }}" alt="{{ message.file_name }}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/{{ message.file_path }}')">
                 {% else %}
-                <a href="/download/{{ message.file_path }}" class="inline-block text-blue-500 underline">{{ message.file_name }}</a>
+                <a href="/{{ message.file_path }}" class="inline-block text-blue-500 underline">
+                    {% if message.file_name|length > 20 %}
+                    {{ message.file_name[:17] + '...' }}
+                    {% else %}
+                    {{ message.file_name }}
+                    {% endif %}
+                </a>
                 {% endif %}
                 {% endif %}
                 <span class="text-xs text-gray-500">({{ message.timestamp }})</span>
@@ -34,26 +40,42 @@
     <form id="send-message-form" class="flex space-x-2" enctype="multipart/form-data">
         <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
         <input type="hidden" name="telegram_id" value="{{ telegram_id }}">
-        <input type="text" name="text" placeholder="Введите сообщение" required class="w-full p-2 border rounded" autocomplete="off">
+        <input type="text" name="text" id="message-input" placeholder="Введите сообщение" class="w-full p-2 border rounded" autocomplete="off">
         <input type="file" name="file" accept="image/*,.pdf,.txt,.log" class="p-2 border rounded">
         <button type="submit" class="bg-blue-500 text-white p-2 rounded">Отправить</button>
     </form>
     
     <!-- Модальное окно для полноэкранного просмотра изображений -->
     <div id="imageModal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center hidden">
-        <div class="relative">
+        <div class="relative max-w-full max-h-screen">
             <img id="modalImage" src="" class="max-w-full max-h-screen">
-            <button onclick="closeImageModal()" class="absolute top-0 right-0 bg-red-500 text-white p-2 rounded">Закрыть</button>
+            <button onclick="closeImageModal()" class="absolute top-0 right-0 bg-black bg-opacity-50 rounded-full p-2 opacity-70 hover:opacity-100 transition-opacity" title="Закрыть">
+                <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+            </button>
         </div>
     </div>
     
     <script>
+        function shortenFilename(filename) {
+            if (!filename) return 'unknown';
+            if (filename.length > 20) {
+                return filename.substring(0, 17) + '...';
+            }
+            return filename;
+        }
+
         const socket = io('http://localhost:8080', { transports: ['websocket'] });
         socket.on('connect', () => {
             console.log('Подключено к SocketIO');
         });
         socket.on('new_message', (data) => {
             console.log('Новое сообщение:', data);
+            if (!data.ticket_id || !data.text || !data.timestamp) {
+                console.error('Некорректные данные сообщения:', data);
+                return;
+            }
             const messagesDiv = document.getElementById('messages');
             const messageDiv = document.createElement('div');
             messageDiv.className = data.is_from_bot ? 'text-right mb-2' : 'text-left mb-2';
@@ -63,9 +85,9 @@
                     ${data.login || 'Unknown'}: ${data.text}
                     ${data.file_type ? `
                         ${data.file_type === 'image' ? `
-                            <img src="/${data.file_path}" alt="${data.file_name}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/${data.file_path}')">
+                            <img src="/${data.file_path || ''}" alt="${data.file_name || 'image'}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/${data.file_path || ''}')">
                         ` : `
-                            <a href="/download/${data.file_path}" class="inline-block text-blue-500 underline">${data.file_name}</a>
+                            <a href="/${data.file_path || ''}" class="inline-block text-blue-500 underline">${shortenFilename(data.file_name)}</a>
                         `}
                     ` : ''}
                     <span class="text-xs text-gray-500">(${data.timestamp})</span>
@@ -75,7 +97,12 @@
                 messagesDiv.prepend(messageDiv);
             } else if (data.ticket_id === {{ ticket_id }}) {
                 messagesDiv.appendChild(messageDiv);
-                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                // Скролл вниз, только если пользователь находится близко к нижней части контейнера
+                const isNearBottom = messagesDiv.scrollTop + messagesDiv.clientHeight >= messagesDiv.scrollHeight - 100;
+                if (isNearBottom) {
+                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                    console.log('Скролл к последнему сообщению');
+                }
             }
         });
         socket.on('no_more_history', (data) => {
@@ -88,6 +115,7 @@
         document.getElementById('send-message-form').addEventListener('submit', (e) => {
             e.preventDefault();
             const formData = new FormData(e.target);
+            console.log('Отправка формы:', Object.fromEntries(formData));
             fetch('/send_message', {
                 method: 'POST',
                 body: formData
@@ -99,9 +127,13 @@
                     e.target.reset();
                 } else {
                     console.error('Ошибка:', data.message);
+                    alert('Ошибка отправки сообщения: ' + data.message);
                 }
             })
-            .catch(error => console.error('Ошибка:', error));
+            .catch(error => {
+                console.error('Ошибка:', error);
+                alert('Ошибка отправки сообщения');
+            });
         });
 
         document.getElementById('close-ticket-btn').addEventListener('click', () => {
@@ -152,12 +184,64 @@
             const modalImage = document.getElementById('modalImage');
             modalImage.src = src;
             modal.classList.remove('hidden');
+            console.log('Модальное окно открыто');
         }
 
         function closeImageModal() {
             const modal = document.getElementById('imageModal');
             modal.classList.add('hidden');
+            console.log('Модальное окно закрыто');
         }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeImageModal();
+            }
+        });
+
+        document.getElementById('message-input').addEventListener('paste', async (e) => {
+            e.preventDefault();
+            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+            for (const item of items) {
+                if (item.type.startsWith('image/')) {
+                    const file = item.getAsFile();
+                    const formData = new FormData();
+                    formData.append('ticket_id', '{{ ticket_id }}');
+                    formData.append('telegram_id', '{{ telegram_id }}');
+                    const inputText = document.getElementById('message-input').value;
+                    formData.append('text', inputText);
+                    formData.append('file', file, `screenshot-${Date.now()}.png`);
+
+                    console.log('Отправка изображения из буфера:', Object.fromEntries(formData));
+                    try {
+                        const response = await fetch('/send_message', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        const data = await response.json();
+                        if (data.status === 'ok') {
+                            console.log('Изображение из буфера обмена отправлено');
+                            document.getElementById('send-message-form').reset();
+                        } else {
+                            console.error('Ошибка:', data.message);
+                            alert('Не удалось отправить изображение: ' + data.message);
+                        }
+                    } catch (error) {
+                        console.error('Ошибка:', error);
+                        alert('Не удалось отправить изображение');
+                    }
+                    break;
+                }
+            }
+        });
+
+        // Скролл вниз при загрузке страницы
+        window.onload = () => {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            console.log('Скролл к последнему сообщению при загрузке');
+        };
     </script>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'938716f57e35bd54',t:'MTc0NjAxNjYzOC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>
 </body>
 </html>
