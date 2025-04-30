@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Support Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body class="p-4">
+    <h1 class="text-2xl mb-4">Тикеты техподдержки</h1>
+    <button id="cleanupBtn" class="bg-red-500 text-white p-2 rounded mb-4">Очистить старые тикеты</button>
+    <div id="ticketsList">
+        {% for ticket in tickets %}
+        <div class="border p-4 mb-2" data-ticket-id="{{ ticket.id }}">
+            <p class="font-bold">Тикет #{{ ticket.id }}</p>
+            <p>Пользователь: {{ ticket.login }}</p>
+            {% if ticket.last_message %}
+            <p class="text-sm text-gray-600">
+                Последнее сообщение: {{ ticket.last_message }} 
+                <span class="text-xs text-gray-500">({{ ticket.last_message_timestamp }})</span>
+                {% if ticket.file_type %}
+                <span class="inline-block">
+                    {% if ticket.file_type == 'image' %}
+                    <img src="/{{ ticket.file_path }}" alt="{{ ticket.file_name }}" class="inline h-6 w-6">
+                    {% else %}
+                    <svg class="inline h-6 w-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9l-7-7H7a2 2 0 00-2 2v16a2 2 0 002 2z"></path>
+                    </svg>
+                    {% endif %}
+                    {{ ticket.file_name }}
+                </span>
+                {% endif %}
+            </p>
+            {% else %}
+            <p class="text-sm text-gray-600">Сообщений пока нет</p>
+            {% endif %}
+            <a href="/ticket/{{ ticket.id }}" class="bg-blue-500 text-white p-2 rounded inline-block mt-2">Открыть</a>
+        </div>
+        {% endfor %}
+    </div>
+    <script>
+        const socket = io('http://localhost:8080');
+
+        socket.on('connect', () => {
+            console.log('Подключено к SocketIO');
+        });
+
+        socket.on('connect_error', (error) => {
+            console.error('Ошибка подключения к SocketIO:', error);
+        });
+
+        document.getElementById("cleanupBtn").addEventListener("click", () => {
+            fetch("/cleanup", { method: 'POST' }).then(() => location.reload());
+        });
+
+        socket.on("update_tickets", (data) => {
+            console.log('Новый тикет:', data);
+            const ticketDiv = document.createElement("div");
+            ticketDiv.className = "border p-4 mb-2";
+            ticketDiv.setAttribute("data-ticket-id", data.ticket_id);
+            ticketDiv.innerHTML = `
+                <p class="font-bold">Тикет #${data.ticket_id}</p>
+                <p>Пользователь: ${data.login || 'Unknown'}</p>
+                ${data.last_message ? `
+                    <p class="text-sm text-gray-600">
+                        Последнее сообщение: ${data.last_message} 
+                        <span class="text-xs text-gray-500">(${data.last_message_timestamp})</span>
+                        ${data.file_type ? `
+                            <span class="inline-block">
+                                ${data.file_type === 'image' ? `
+                                    <img src="/${data.file_path}" alt="${data.file_name}" class="inline h-6 w-6">
+                                ` : `
+                                    <svg class="inline h-6 w-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9l-7-7H7a2 2 0 00-2 2v16a2 2 0 002 2z"></path>
+                                    </svg>
+                                `}
+                                ${data.file_name}
+                            </span>
+                        ` : ''}
+                    </p>
+                ` : `
+                    <p class="text-sm text-gray-600">Сообщений пока нет</p>
+                `}
+                <a href="/ticket/${data.ticket_id}" class="bg-blue-500 text-white p-2 rounded inline-block mt-2">Открыть</a>
+            `;
+            document.getElementById("ticketsList").appendChild(ticketDiv);
+        });
+
+        socket.on("ticket_closed", (data) => {
+            console.log('Тикет закрыт:', data);
+            const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
+            if (ticketDiv) {
+                ticketDiv.remove();
+            }
+        });
+
+        socket.on("new_message", (data) => {
+            console.log('Новое сообщение:', data);
+            const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
+            if (ticketDiv) {
+                const messageP = ticketDiv.querySelector('.text-sm');
+                if (messageP) {
+                    const isHistoryMessage = data.text.startsWith('[Тикет #');
+                    if (!isHistoryMessage) {
+                        messageP.innerHTML = `
+                            Последнее сообщение: ${data.text} 
+                            <span class="text-xs text-gray-500">(${data.timestamp})</span>
+                            ${data.file_type ? `
+                                <span class="inline-block">
+                                    ${data.file_type === 'image' ? `
+                                        <img src="/${data.file_path}" alt="${data.file_name}" class="inline h-6 w-6">
+                                    ` : `
+                                        <svg class="inline h-6 w-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9l-7-7H7a2 2 0 00-2 2v16a2 2 0 002 2z"></path>
+                                        </svg>
+                                    `}
+                                    ${data.file_name}
+                                </span>
+                            ` : ''}
+                        `;
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>

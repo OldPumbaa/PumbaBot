@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Тикет #{{ ticket_id }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body class="p-4">
+    <div class="flex justify-between items-center mb-4">
+        <h1 class="text-2xl">Тикет #{{ ticket_id }} ({{ login }})</h1>
+        <div>
+            <button onclick="window.location.href='/'" class="bg-gray-500 text-white p-2 rounded mr-2">Назад</button>
+            <button id="fetch-history-btn" class="bg-green-500 text-white p-2 rounded mr-2">Подтянуть историю</button>
+            <button id="close-ticket-btn" class="bg-red-500 text-white p-2 rounded">Закрыть тикет</button>
+        </div>
+    </div>
+    <div id="messages" class="border p-4 mb-4 h-96 overflow-y-auto">
+        {% for message in messages %}
+        <div class="{% if message.is_from_bot %}text-right{% else %}text-left{% endif %} mb-2">
+            <p class="inline-block bg-{% if message.text.startswith('[Тикет #') %}yellow-200{% else %}{% if message.is_from_bot %}blue-200{% else %}gray-200{% endif %}{% endif %} p-2 rounded">
+                {{ message.login }}: {{ message.text }}
+                {% if message.file_type %}
+                {% if message.file_type == 'image' %}
+                <img src="/{{ message.file_path }}" alt="{{ message.file_name }}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/{{ message.file_path }}')">
+                {% else %}
+                <a href="/download/{{ message.file_path }}" class="inline-block text-blue-500 underline">{{ message.file_name }}</a>
+                {% endif %}
+                {% endif %}
+                <span class="text-xs text-gray-500">({{ message.timestamp }})</span>
+            </p>
+        </div>
+        {% endfor %}
+    </div>
+    <form id="send-message-form" class="flex space-x-2" enctype="multipart/form-data">
+        <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
+        <input type="hidden" name="telegram_id" value="{{ telegram_id }}">
+        <input type="text" name="text" placeholder="Введите сообщение" required class="w-full p-2 border rounded" autocomplete="off">
+        <input type="file" name="file" accept="image/*,.pdf,.txt,.log" class="p-2 border rounded">
+        <button type="submit" class="bg-blue-500 text-white p-2 rounded">Отправить</button>
+    </form>
+    
+    <!-- Модальное окно для полноэкранного просмотра изображений -->
+    <div id="imageModal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center hidden">
+        <div class="relative">
+            <img id="modalImage" src="" class="max-w-full max-h-screen">
+            <button onclick="closeImageModal()" class="absolute top-0 right-0 bg-red-500 text-white p-2 rounded">Закрыть</button>
+        </div>
+    </div>
+    
+    <script>
+        const socket = io('http://localhost:8080', { transports: ['websocket'] });
+        socket.on('connect', () => {
+            console.log('Подключено к SocketIO');
+        });
+        socket.on('new_message', (data) => {
+            console.log('Новое сообщение:', data);
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = data.is_from_bot ? 'text-right mb-2' : 'text-left mb-2';
+            const isHistoryMessage = data.text.startsWith('[Тикет #');
+            messageDiv.innerHTML = `
+                <p class="inline-block bg-${isHistoryMessage ? 'yellow-200' : (data.is_from_bot ? 'blue-200' : 'gray-200')} p-2 rounded">
+                    ${data.login || 'Unknown'}: ${data.text}
+                    ${data.file_type ? `
+                        ${data.file_type === 'image' ? `
+                            <img src="/${data.file_path}" alt="${data.file_name}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/${data.file_path}')">
+                        ` : `
+                            <a href="/download/${data.file_path}" class="inline-block text-blue-500 underline">${data.file_name}</a>
+                        `}
+                    ` : ''}
+                    <span class="text-xs text-gray-500">(${data.timestamp})</span>
+                </p>
+            `;
+            if (isHistoryMessage) {
+                messagesDiv.prepend(messageDiv);
+            } else if (data.ticket_id === {{ ticket_id }}) {
+                messagesDiv.appendChild(messageDiv);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+        });
+        socket.on('no_more_history', (data) => {
+            console.log('Нет больше истории:', data);
+            if (data.ticket_id === {{ ticket_id }}) {
+                alert('Больше истории нет');
+            }
+        });
+
+        document.getElementById('send-message-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            fetch('/send_message', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    console.log('Сообщение отправлено');
+                    e.target.reset();
+                } else {
+                    console.error('Ошибка:', data.message);
+                }
+            })
+            .catch(error => console.error('Ошибка:', error));
+        });
+
+        document.getElementById('close-ticket-btn').addEventListener('click', () => {
+            const formData = new FormData();
+            formData.append('ticket_id', '{{ ticket_id }}');
+            fetch('/close_ticket', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    console.log('Тикет закрыт');
+                    window.location.href = '/';
+                } else {
+                    console.error('Ошибка:', data.message);
+                }
+            })
+            .catch(error => console.error('Ошибка:', error));
+        });
+
+        document.getElementById('fetch-history-btn').addEventListener('click', () => {
+            const formData = new FormData();
+            formData.append('ticket_id', '{{ ticket_id }}');
+            formData.append('telegram_id', '{{ telegram_id }}');
+            fetch('/fetch_telegram_history', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    console.log(`История подтянута из тикета #${data.fetched_ticket_id}`);
+                } else if (data.status === 'no_more_history') {
+                    console.log('Больше истории нет');
+                } else {
+                    console.error('Ошибка:', data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Ошибка:', error);
+                alert('Не удалось подтянуть историю. Попробуйте позже.');
+            });
+        });
+
+        function openImageModal(src) {
+            const modal = document.getElementById('imageModal');
+            const modalImage = document.getElementById('modalImage');
+            modalImage.src = src;
+            modal.classList.remove('hidden');
+        }
+
+        function closeImageModal() {
+            const modal = document.getElementById('imageModal');
+            modal.classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
