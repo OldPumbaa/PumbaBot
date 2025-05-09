@@ -4,48 +4,191 @@
     <title>Тикет #{{ ticket_id }}</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        .message-text {
+            line-height: 1;
+            margin: 0;
+            padding: 0 0.5rem;
+            font-size: 0.875rem;
+        }
+        .chat-container {
+            height: 384px; /* Matches Tailwind's h-96 */
+            overflow-y: auto;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 15% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 400px;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .close:hover,
+        .close:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+    </style>
 </head>
 <body class="p-4">
     <div class="flex justify-between items-center mb-4">
-        <h1 class="text-2xl">Тикет #{{ ticket_id }} ({{ login }})</h1>
-        <div>
-            <button onclick="window.location.href='/'" class="bg-gray-500 text-white p-2 rounded mr-2">Назад</button>
-            <button id="fetch-history-btn" class="bg-green-500 text-white p-2 rounded mr-2">Подтянуть историю</button>
+        <h1 class="text-2xl">Тикет #{{ ticket_id }} ({{ login }}) 
+            {% if is_muted %}
+            <span class="text-yellow-500">🔇 Замучен до {{ mute_end_time }}</span>
+            {% elif is_banned %}
+            <span class="text-red-500">🚫 Забанен {% if ban_end_time %}до {{ ban_end_time }}{% else %}навсегда{% endif %}</span>
+            {% endif %}
+        </h1>
+        <div class="flex space-x-2">
+            <button id="mute-btn" class="bg-yellow-500 text-white p-2 rounded">Мут</button>
+            <button id="ban-btn" class="bg-red-500 text-white p-2 rounded">Бан</button>
+            {% if is_muted %}
+            <form id="unmute-form" method="post" action="/unmute_user" class="inline">
+                <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
+                <input type="hidden" name="telegram_id" value="{{ telegram_id }}">
+                <button type="submit" class="bg-green-500 text-white p-2 rounded">Снять мут</button>
+            </form>
+            {% endif %}
+            {% if is_banned %}
+            <form id="unban-form" method="post" action="/unban_user" class="inline">
+                <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
+                <input type="hidden" name="telegram_id" value="{{ telegram_id }}">
+                <button type="submit" class="bg-green-500 text-white p-2 rounded">Снять бан</button>
+            </form>
+            {% endif %}
+            <button onclick="window.location.href='/'" class="bg-gray-500 text-white p-2 rounded">Назад</button>
+            <button id="fetch-history-btn" class="bg-green-500 text-white p-2 rounded">Подтянуть историю</button>
             <button id="close-ticket-btn" class="bg-red-500 text-white p-2 rounded">Закрыть тикет</button>
         </div>
     </div>
-    <div id="messages" class="border p-4 mb-4 h-96 overflow-y-auto">
-        {% for message in messages %}
-        <div class="{% if message.is_from_bot %}text-right{% else %}text-left{% endif %} mb-2">
-            <p class="inline-block bg-{% if message.text.startswith('[Тикет #') %}yellow-200{% else %}{% if message.is_from_bot %}blue-200{% else %}gray-200{% endif %}{% endif %} p-2 rounded">
-                {{ message.login }}: {{ message.text }}
-                {% if message.file_type %}
-                {% if message.file_type == 'image' %}
-                <img src="/{{ message.file_path }}" alt="{{ message.file_name }}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/{{ message.file_path }}')">
-                {% else %}
-                <a href="/{{ message.file_path }}" class="inline-block text-blue-500 underline">
-                    {% if message.file_name|length > 20 %}
-                    {{ message.file_name[:17] + '...' }}
-                    {% else %}
-                    {{ message.file_name }}
-                    {% endif %}
-                </a>
-                {% endif %}
-                {% endif %}
-                <span class="text-xs text-gray-500">({{ message.timestamp }})</span>
-            </p>
+    <div class="mb-4 flex space-x-4">
+        <div>
+            <label class="mr-2">Тип вопроса:</label>
+            <select id="issue-type-select" class="p-2 border rounded">
+                <option value="n/a" {% if not issue_type %}selected{% endif %}>n/a</option>
+                <option value="tech" {% if issue_type == 'tech' %}selected{% endif %}>tech</option>
+                <option value="org" {% if issue_type == 'org' %}selected{% endif %}>org</option>
+                <option value="ins" {% if issue_type == 'ins' %}selected{% endif %}>ins</option>
+            </select>
         </div>
-        {% endfor %}
+        <div>
+            <label class="mr-2">Ответственный:</label>
+            <select id="assign-to-select" class="p-2 border rounded">
+                <option value="">Не назначен</option>
+                {% for emp in support_employees %}
+                <option value="{{ emp.telegram_id }}" {% if assigned_to == emp.telegram_id %}selected{% endif %}>{{ emp.login }}</option>
+                {% endfor %}
+            </select>
+        </div>
     </div>
-    <form id="send-message-form" class="flex space-x-2" enctype="multipart/form-data">
-        <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
-        <input type="hidden" name="telegram_id" value="{{ telegram_id }}">
-        <input type="text" name="text" id="message-input" placeholder="Введите сообщение" class="w-full p-2 border rounded" autocomplete="off">
-        <input type="file" name="file" accept="image/*,.pdf,.txt,.log" class="p-2 border rounded">
-        <button type="submit" class="bg-blue-500 text-white p-2 rounded">Отправить</button>
-    </form>
+    <div class="flex space-x-4">
+        <!-- Main Chat (75%) -->
+        <div class="w-3/4">
+            <div id="messages" class="border p-4 mb-4 chat-container">
+                {% for message in messages %}
+                <div class="message-container {% if message.is_from_bot %}text-right{% else %}text-left{% endif %} mb-2">
+                    <p class="message-text inline-block bg-{% if message.text.startswith('[Тикет #') %}yellow-200{% else %}{% if message.is_from_bot %}blue-200{% else %}gray-200{% endif %}{% endif %} px-2 rounded whitespace-pre-wrap">
+                        {{ message.login }}: {{ message.text }}
+                        {% if message.file_type %}
+                        {% if message.file_type == 'image' %}
+                        <img src="/{{ message.file_path }}" alt="{{ message.file_name }}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/{{ message.file_path }}')">
+                        {% else %}
+                        <a href="/{{ message.file_path }}" class="inline-block text-blue-500 underline">
+                            {% if message.file_name|length > 20 %}
+                            {{ message.file_name[:17] + '...' }}
+                            {% else %}
+                            {{ message.file_name }}
+                            {% endif %}
+                        </a>
+                        {% endif %}
+                        {% endif %}
+                        <span class="timestamp text-xs text-gray-500"> ({{ message.timestamp }})</span>
+                    </p>
+                </div>
+                {% endfor %}
+            </div>
+            <form id="send-message-form" class="flex space-x-2 items-start" enctype="multipart/form-data">
+                <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
+                <input type="hidden" name="telegram_id" value="{{ telegram_id }}">
+                <div class="flex-grow">
+                    <textarea name="text" id="message-input" placeholder="Введите сообщение" class="w-full p-2 border rounded min-h-[60px] max-h-[100px] overflow-y-auto resize-none" rows="3"></textarea>
+                </div>
+                <div class="flex space-x-2">
+                    <input type="file" name="file" id="file-input" accept="image/*,.pdf,.txt,.log" class="hidden">
+                    <button type="button" id="attach-file-btn" class="p-2 border rounded bg-gray-200">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6">
+                            <path d="M21.44 11.05l-9.2 9.2a6 6 0 1 1-8.49-8.49l9.2-9.2a4 4 0 0 1 5.66 5.66l-9.2 9.2a2 2 0 0 1-2.83-2.83l8.49-8.49"></path>
+                        </svg>
+                    </button>
+                    <button type="submit" class="bg-blue-500 text-white p-2 rounded">Отправить</button>
+                </div>
+            </form>
+        </div>
+        <!-- Admin Chat (25%) -->
+        <div class="w-1/4">
+            <div id="admin-messages" class="border p-4 mb-4 chat-container">
+                {% for admin_message in admin_messages %}
+                <div class="message-container text-left mb-2">
+                    <p class="message-text inline-block bg-green-200 px-2 rounded whitespace-pre-wrap">
+                        {{ admin_message.login }}: {{ admin_message.text }}
+                        <span class="timestamp text-xs text-gray-500"> ({{ admin_message.timestamp }})</span>
+                    </p>
+                </div>
+                {% endfor %}
+            </div>
+            <form id="send-admin-message-form" class="flex space-x-2 items-start">
+                <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
+                <div class="flex-grow">
+                    <textarea name="text" id="admin-message-input" placeholder="Внутренний чат ТП" class="w-full p-2 border rounded min-h-[60px] max-h-[100px] overflow-y-auto resize-none" rows="3"></textarea>
+                </div>
+                <button type="submit" class="bg-green-500 text-white p-2 rounded">Отправить</button>
+            </form>
+        </div>
+    </div>
     
-    <!-- Модальное окно для полноэкранного просмотра изображений -->
+    <!-- Модальное окно для мута -->
+    <div id="muteModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('muteModal')">&times;</span>
+            <h2>Мут пользователя</h2>
+            <form id="mute-form-modal" class="mt-4">
+                <input type="number" name="mute_duration" placeholder="Минут" class="p-2 border rounded w-24 mr-2" required>
+                <button type="submit" class="bg-yellow-500 text-white p-2 rounded">Мут</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Модальное окно для бана -->
+    <div id="banModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('banModal')">&times;</span>
+            <h2>Бан пользователя</h2>
+            <form id="ban-form-modal" class="mt-4">
+                <input type="number" name="ban_duration" placeholder="Минут (необяз.)" class="p-2 border rounded w-24 mr-2">
+                <label class="mr-2"><input type="checkbox" name="permanent"> Навсегда</label>
+                <button type="submit" class="bg-red-500 text-white p-2 rounded">Бан</button>
+            </form>
+        </div>
+    </div>
+
     <div id="imageModal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center hidden">
         <div class="relative max-w-full max-h-screen">
             <img id="modalImage" src="" class="max-w-full max-h-screen">
@@ -78,10 +221,10 @@
             }
             const messagesDiv = document.getElementById('messages');
             const messageDiv = document.createElement('div');
-            messageDiv.className = data.is_from_bot ? 'text-right mb-2' : 'text-left mb-2';
+            messageDiv.className = `message-container ${data.is_from_bot ? 'text-right' : 'text-left'} mb-2`;
             const isHistoryMessage = data.text.startsWith('[Тикет #');
             messageDiv.innerHTML = `
-                <p class="inline-block bg-${isHistoryMessage ? 'yellow-200' : (data.is_from_bot ? 'blue-200' : 'gray-200')} p-2 rounded">
+                <p class="message-text inline-block bg-${isHistoryMessage ? 'yellow-200' : (data.is_from_bot ? 'blue-200' : 'gray-200')} px-2 rounded whitespace-pre-wrap">
                     ${data.login || 'Unknown'}: ${data.text}
                     ${data.file_type ? `
                         ${data.file_type === 'image' ? `
@@ -90,18 +233,35 @@
                             <a href="/${data.file_path || ''}" class="inline-block text-blue-500 underline">${shortenFilename(data.file_name)}</a>
                         `}
                     ` : ''}
-                    <span class="text-xs text-gray-500">(${data.timestamp})</span>
+                    <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
                 </p>
             `;
             if (isHistoryMessage) {
                 messagesDiv.prepend(messageDiv);
             } else if (data.ticket_id === {{ ticket_id }}) {
                 messagesDiv.appendChild(messageDiv);
-                // Скролл вниз, только если пользователь находится близко к нижней части контейнера
-                const isNearBottom = messagesDiv.scrollTop + messagesDiv.clientHeight >= messagesDiv.scrollHeight - 100;
-                if (isNearBottom) {
-                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
-                    console.log('Скролл к последнему сообщению');
+                const isAtBottom = messagesDiv.scrollTop + messagesDiv.clientHeight >= messagesDiv.scrollHeight - 10;
+                if (isAtBottom) {
+                    messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
+                }
+            }
+        });
+        socket.on('new_admin_message', (data) => {
+            console.log('Новое сообщение в админ-чате:', data);
+            if (data.ticket_id === {{ ticket_id }}) {
+                const adminMessagesDiv = document.getElementById('admin-messages');
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message-container text-left mb-2';
+                messageDiv.innerHTML = `
+                    <p class="message-text inline-block bg-green-200 px-2 rounded whitespace-pre-wrap">
+                        ${data.login || 'Unknown'}: ${data.text}
+                        <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
+                    </p>
+                `;
+                adminMessagesDiv.appendChild(messageDiv);
+                const isAtBottom = adminMessagesDiv.scrollTop + adminMessagesDiv.clientHeight >= adminMessagesDiv.scrollHeight - 10;
+                if (isAtBottom) {
+                    adminMessagesDiv.scrollTo({ top: adminMessagesDiv.scrollHeight, behavior: 'smooth' });
                 }
             }
         });
@@ -111,10 +271,30 @@
                 alert('Больше истории нет');
             }
         });
+        socket.on('ticket_assigned', (data) => {
+            console.log('Тикет назначен:', data);
+            if (data.ticket_id === {{ ticket_id }}) {
+                const assignSelect = document.getElementById('assign-to-select');
+                assignSelect.value = data.assigned_to || '';
+            }
+        });
+        socket.on('issue_type_updated', (data) => {
+            console.log('Тип тикета обновлен:', data);
+            if (data.ticket_id === {{ ticket_id }}) {
+                const issueTypeSelect = document.getElementById('issue-type-select');
+                issueTypeSelect.value = data.issue_type || 'n/a';
+            }
+        });
 
-        document.getElementById('send-message-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
+        function sendMessage(form) {
+            const formData = new FormData(form);
+            const text = formData.get('text').trim();
+            const issueType = document.getElementById('issue-type-select').value;
+            formData.append('issue_type', issueType);
+            if (!text && !formData.get('file')) {
+                console.log('Пустое сообщение, отправка предотвращена');
+                return;
+            }
             console.log('Отправка формы:', Object.fromEntries(formData));
             fetch('/send_message', {
                 method: 'POST',
@@ -124,7 +304,9 @@
             .then(data => {
                 if (data.status === 'ok') {
                     console.log('Сообщение отправлено');
-                    e.target.reset();
+                    form.reset();
+                    const messagesDiv = document.getElementById('messages');
+                    messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
                 } else {
                     console.error('Ошибка:', data.message);
                     alert('Ошибка отправки сообщения: ' + data.message);
@@ -134,6 +316,64 @@
                 console.error('Ошибка:', error);
                 alert('Ошибка отправки сообщения');
             });
+        }
+
+        function sendAdminMessage(form) {
+            const formData = new FormData(form);
+            const text = formData.get('text').trim();
+            if (!text) {
+                console.log('Пустое сообщение в админ-чате, отправка предотвращена');
+                return;
+            }
+            console.log('Отправка сообщения в админ-чат:', Object.fromEntries(formData));
+            fetch('/send_admin_message', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    console.log('Сообщение в админ-чат отправлено');
+                    form.reset();
+                    const adminMessagesDiv = document.getElementById('admin-messages');
+                    adminMessagesDiv.scrollTo({ top: adminMessagesDiv.scrollHeight, behavior: 'smooth' });
+                } else {
+                    console.error('Ошибка:', data.message);
+                    alert('Ошибка отправки сообщения в админ-чат: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Ошибка:', error);
+                alert('Ошибка отправки сообщения в админ-чат');
+            });
+        }
+
+        document.getElementById('send-message-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            sendMessage(e.target);
+        });
+
+        document.getElementById('send-admin-message-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            sendAdminMessage(e.target);
+        });
+
+        document.getElementById('admin-message-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                console.log('Нажат Enter в админ-чате, инициируем отправку');
+                const form = document.getElementById('send-admin-message-form');
+                sendAdminMessage(form);
+            }
+        });
+
+        document.getElementById('message-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                console.log('Нажат Enter, инициируем отправку');
+                const form = document.getElementById('send-message-form');
+                sendMessage(form);
+            }
         });
 
         document.getElementById('close-ticket-btn').addEventListener('click', () => {
@@ -179,6 +419,145 @@
             });
         });
 
+        document.getElementById('issue-type-select').addEventListener('change', (e) => {
+            const formData = new FormData();
+            formData.append('ticket_id', '{{ ticket_id }}');
+            formData.append('issue_type', e.target.value);
+            fetch('/update_issue_type', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    console.log('Тип тикета обновлен');
+                } else {
+                    console.error('Ошибка:', data.message);
+                }
+            })
+            .catch(error => console.error('Ошибка:', error));
+        });
+
+        document.getElementById('assign-to-select').addEventListener('change', (e) => {
+            const formData = new FormData();
+            formData.append('ticket_id', '{{ ticket_id }}');
+            formData.append('assigned_to', e.target.value);
+            fetch('/assign_ticket', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    console.log('Тикет переназначен');
+                } else {
+                    console.error('Ошибка:', data.message);
+                }
+            })
+            .catch(error => console.error('Ошибка:', error));
+        });
+
+        // Управление модальными окнами
+        function openModal(modalId) {
+            document.getElementById(modalId).style.display = 'block';
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+
+        document.getElementById('mute-btn').addEventListener('click', () => openModal('muteModal'));
+        document.getElementById('ban-btn').addEventListener('click', () => openModal('banModal'));
+
+        document.getElementById('mute-form-modal').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            formData.append('ticket_id', '{{ ticket_id }}');
+            formData.append('telegram_id', '{{ telegram_id }}');
+            fetch('/mute_user', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    alert('Пользователь замучен');
+                    closeModal('muteModal');
+                    location.reload();
+                } else {
+                    alert('Ошибка: ' + data.message);
+                }
+            })
+            .catch(error => console.error('Ошибка:', error));
+        });
+
+        document.getElementById('ban-form-modal').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            formData.append('ticket_id', '{{ ticket_id }}');
+            formData.append('telegram_id', '{{ telegram_id }}');
+            if (formData.get('permanent') === 'on') {
+                formData.delete('ban_duration');
+            }
+            fetch('/ban_user', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    alert('Пользователь забанен');
+                    closeModal('banModal');
+                    location.reload();
+                } else {
+                    alert('Ошибка: ' + data.message);
+                }
+            })
+            .catch(error => console.error('Ошибка:', error));
+        });
+
+        {% if is_muted %}
+        document.getElementById('unmute-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            fetch('/unmute_user', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    alert('Мут снят');
+                    location.reload();
+                } else {
+                    alert('Ошибка: ' + data.message);
+                }
+            })
+            .catch(error => console.error('Ошибка:', error));
+        });
+        {% endif %}
+
+        {% if is_banned %}
+        document.getElementById('unban-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            fetch('/unban_user', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    alert('Бан снят');
+                    location.reload();
+                } else {
+                    alert('Ошибка: ' + data.message);
+                }
+            })
+            .catch(error => console.error('Ошибка:', error));
+        });
+        {% endif %}
+
         function openImageModal(src) {
             const modal = document.getElementById('imageModal');
             const modalImage = document.getElementById('modalImage');
@@ -211,6 +590,7 @@
                     const inputText = document.getElementById('message-input').value;
                     formData.append('text', inputText);
                     formData.append('file', file, `screenshot-${Date.now()}.png`);
+                    formData.append('issue_type', document.getElementById('issue-type-select').value);
 
                     console.log('Отправка изображения из буфера:', Object.fromEntries(formData));
                     try {
@@ -235,13 +615,29 @@
             }
         });
 
-        // Скролл вниз при загрузке страницы
         window.onload = () => {
             const messagesDiv = document.getElementById('messages');
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            const adminMessagesDiv = document.getElementById('admin-messages');
+            adminMessagesDiv.scrollTop = adminMessagesDiv.scrollHeight;
             console.log('Скролл к последнему сообщению при загрузке');
         };
+
+        const textarea = document.getElementById('message-input');
+        textarea.addEventListener('input', () => {
+            textarea.style.height = 'auto';
+            textarea.style.height = `${Math.min(textarea.scrollHeight, 100)}px`;
+        });
+
+        const adminTextarea = document.getElementById('admin-message-input');
+        adminTextarea.addEventListener('input', () => {
+            adminTextarea.style.height = 'auto';
+            adminTextarea.style.height = `${Math.min(adminTextarea.scrollHeight, 100)}px`;
+        });
+
+        document.getElementById('attach-file-btn').addEventListener('click', () => {
+            document.getElementById('file-input').click();
+        });
     </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'938716f57e35bd54',t:'MTc0NjAxNjYzOC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>
 </body>
 </html>

@@ -3,14 +3,12 @@ import uvicorn
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, ContentType, FSInputFile
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from app import app, sio, message_queue, set_event_loop, socketio_app
+from app import app, sio, message_queue, set_event_loop
 from dotenv import load_dotenv
 import os
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import pytz
 import time
@@ -23,14 +21,25 @@ logging.basicConfig(
 )
 
 load_dotenv()
-bot = Bot(token=os.getenv("BOT_TOKEN"))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
+NOTIFICATION_CHAT_ID = os.getenv("NOTIFICATION_CHAT_ID")
+NOTIFICATION_TOPIC_ID = os.getenv("NOTIFICATION_TOPIC_ID")
+
+if not BOT_TOKEN or not ADMIN_TELEGRAM_ID:
+    logging.error("BOT_TOKEN или ADMIN_TELEGRAM_ID не указаны в .env")
+    raise ValueError("BOT_TOKEN and ADMIN_TELEGRAM_ID must be set in .env file")
+
+if not NOTIFICATION_CHAT_ID or not NOTIFICATION_TOPIC_ID:
+    logging.warning("NOTIFICATION_CHAT_ID или NOTIFICATION_TOPIC_ID не указаны в .env, уведомления не будут отправляться")
+
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-class Registration(StatesGroup):
-    waiting_for_login = State()
-
 def init_db():
+    logging.debug("Начало инициализации базы данных")
     conn = sqlite3.connect("support.db", timeout=10)
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS employees (
@@ -47,8 +56,9 @@ def init_db():
             status TEXT DEFAULT 'open',
             assigned_to INTEGER,
             created_at TEXT,
+            issue_type TEXT,
             FOREIGN KEY (telegram_id) REFERENCES employees (telegram_id),
-            FOREIGN KEY (assigned_to) REFERENCES employees (id)
+            FOREIGN KEY (assigned_to) REFERENCES employees (telegram_id)
         )
     """)
     cursor.execute("""
@@ -58,6 +68,17 @@ def init_db():
             telegram_id INTEGER,
             text TEXT,
             is_from_bot INTEGER,
+            timestamp TEXT,
+            FOREIGN KEY (ticket_id) REFERENCES tickets (ticket_id),
+            FOREIGN KEY (telegram_id) REFERENCES employees (telegram_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admin_messages (
+            message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id INTEGER,
+            telegram_id INTEGER,
+            text TEXT,
             timestamp TEXT,
             FOREIGN KEY (ticket_id) REFERENCES tickets (ticket_id),
             FOREIGN KEY (telegram_id) REFERENCES employees (telegram_id)
@@ -83,8 +104,56 @@ def init_db():
             FOREIGN KEY (message_id) REFERENCES messages (message_id)
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_token TEXT PRIMARY KEY,
+            telegram_id INTEGER,
+            expires_at TEXT,
+            FOREIGN KEY (telegram_id) REFERENCES employees (telegram_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS mutes (
+            user_id INTEGER PRIMARY KEY,
+            end_time TEXT,
+            FOREIGN KEY (user_id) REFERENCES employees (telegram_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bans (
+            user_id INTEGER PRIMARY KEY,
+            end_time TEXT,
+            FOREIGN KEY (user_id) REFERENCES employees (telegram_id)
+        )
+    """)
+    try:
+        admin_telegram_id = int(ADMIN_TELEGRAM_ID)
+        logging.debug(f"Проверка ADMIN_TELEGRAM_ID: {admin_telegram_id}")
+        cursor.execute("SELECT telegram_id, is_admin FROM employees WHERE telegram_id = ?", (admin_telegram_id,))
+        employee = cursor.fetchone()
+        if not employee:
+            logging.debug(f"Добавление администратора: telegram_id={admin_telegram_id}")
+            cursor.execute(
+                "INSERT INTO employees (telegram_id, login, is_admin) VALUES (?, ?, ?)",
+                (admin_telegram_id, "admin", True)
+            )
+        elif not employee["is_admin"]:
+            logging.debug(f"Обновление is_admin для telegram_id={admin_telegram_id}")
+            cursor.execute(
+                "UPDATE employees SET is_admin = ? WHERE telegram_id = ?",
+                (True, admin_telegram_id)
+            )
+        else:
+            logging.debug(f"Администратор уже существует: telegram_id={admin_telegram_id}, is_admin={employee['is_admin']}")
+    except ValueError as e:
+        logging.error(f"Некорректный ADMIN_TELEGRAM_ID в .env: {e}")
+        raise
     conn.commit()
+    cursor.execute("SELECT telegram_id, login, is_admin FROM employees")
+    employees = cursor.fetchall()
+    logging.debug(f"Содержимое таблицы employees после init_db: {employees}")
     conn.close()
+    logging.debug("Инициализация базы данных завершена")
 
 def is_working_hours():
     astana_tz = pytz.timezone('Asia/Almaty')
@@ -94,7 +163,7 @@ def is_working_hours():
     is_working_time = 12 <= hour < 24
     return is_weekday and is_working_time
 
-def get_unique_filename(filename: str, directory: str = "uploads"):
+def get_unique_filename(filename: str, directory: str = "Uploads"):
     cleaned_filename = re.sub(r'[^\w\-\.]', '_', filename)
     cleaned_filename = re.sub(r'_+', '_', cleaned_filename).strip('_')
     base, ext = os.path.splitext(cleaned_filename)
@@ -106,69 +175,116 @@ def get_unique_filename(filename: str, directory: str = "uploads"):
     logging.debug(f"Сгенерировано уникальное имя файла: {filename} -> {new_filename}")
     return new_filename
 
+def is_muted(user_id: int) -> bool:
+    conn = sqlite3.connect("support.db", timeout=10)
+    cursor = conn.cursor()
+    cursor.execute("SELECT end_time FROM mutes WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        end_time = datetime.fromisoformat(row[0])
+        if datetime.now() < end_time:
+            return True
+        else:
+            remove_mute(user_id)
+    return False
+
+def is_banned(user_id: int) -> bool:
+    conn = sqlite3.connect("support.db", timeout=10)
+    cursor = conn.cursor()
+    cursor.execute("SELECT end_time FROM bans WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        if row[0] is None:
+            return True  # Перманентный бан
+        end_time = datetime.fromisoformat(row[0])
+        if datetime.now() < end_time:
+            return True
+        else:
+            remove_ban(user_id)
+    return False
+
+def remove_mute(user_id: int):
+    conn = sqlite3.connect("support.db", timeout=10)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM mutes WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def remove_ban(user_id: int):
+    conn = sqlite3.connect("support.db", timeout=10)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM bans WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+async def send_notification_to_topic(ticket_id: int, login: str, message: str):
+    if NOTIFICATION_CHAT_ID and NOTIFICATION_TOPIC_ID:
+        try:
+            await bot.send_message(
+                chat_id=NOTIFICATION_CHAT_ID,
+                message_thread_id=int(NOTIFICATION_TOPIC_ID),
+                text=f"Тикет #{ticket_id} ({login}): {message}"
+            )
+            logging.debug(f"Уведомление отправлено в чат {NOTIFICATION_CHAT_ID}, топик {NOTIFICATION_TOPIC_ID}: {message}")
+        except Exception as e:
+            logging.error(f"Ошибка отправки уведомления в чат {NOTIFICATION_CHAT_ID}, топик {NOTIFICATION_TOPIC_ID}: {e}")
+
 @dp.message(Command(commands=["start"]))
-async def start_command(message: Message, state: FSMContext):
+async def start_command(message: Message):
     telegram_id = message.from_user.id
+    conn = sqlite3.connect("support.db", timeout=10)
+    cursor = conn.cursor()
+    cursor.execute("SELECT login, is_admin FROM employees WHERE telegram_id = ?", (telegram_id,))
+    employee = cursor.fetchone()
+    conn.close()
+
+    if employee:
+        login, is_admin = employee
+        if is_admin:
+            await message.reply(f"Добро пожаловать, {login}! Вы администратор (техподдержка). Можете создавать тикеты и работать в веб-интерфейсе: http://localhost:8080")
+        else:
+            await message.reply(f"Добро пожаловать, {login}! Вы можете создавать тикеты, отправив сообщение или файл.")
+    else:
+        await message.reply(f"Вы не авторизованы. Попросите администратора добавить ваш Telegram ID. Ваш ID: {telegram_id}")
+
+@dp.message(Command(commands=["myid"]))
+async def my_id_command(message: Message):
+    await message.reply(f"Ваш Telegram ID: {message.from_user.id}")
+
+@dp.message(F.photo)
+async def handle_photo(message: Message):
+    await handle_file(message, 'image')
+
+@dp.message(F.document)
+async def handle_document(message: Message):
+    await handle_file(message, 'document')
+
+async def handle_file(message: Message, file_type: str):
+    telegram_id = message.from_user.id
+    if is_banned(telegram_id):
+        return
+    if is_muted(telegram_id):
+        await message.reply("Вам временно запрещено писать в бота!")
+        return
+
     conn = sqlite3.connect("support.db", timeout=10)
     cursor = conn.cursor()
     cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
     employee = cursor.fetchone()
     conn.close()
 
-    if employee:
-        await message.reply(f"Добро пожаловать, {employee[0]}! Вы уже зарегистрированы.")
-    else:
-        await message.reply("Пожалуйста, введите ваш рабочий логин.")
-        await state.set_state(Registration.waiting_for_login)
-
-@dp.message(Registration.waiting_for_login)
-async def process_login(message: Message, state: FSMContext):
-    login = message.text.strip()
-    telegram_id = message.from_user.id
-
-    if not login:
-        await message.reply("Логин не может быть пустым. Пожалуйста, введите ваш рабочий логин.")
-        return
-
-    conn = sqlite3.connect("support.db", timeout=10)
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "INSERT INTO employees (telegram_id, login, is_admin) VALUES (?, ?, ?)",
-            (telegram_id, login, False)
-        )
-        conn.commit()
-        await message.reply(f"Регистрация завершена! Ваш логин: {login}")
-        await state.clear()
-    except sqlite3.IntegrityError:
-        await message.reply("Этот логин уже занят. Пожалуйста, выберите другой.")
-    finally:
-        conn.close()
-
-@dp.message(F.content_type == ContentType.PHOTO)
-async def handle_photo(message: Message):
-    await handle_file(message, 'image')
-
-@dp.message(F.content_type == ContentType.DOCUMENT)
-async def handle_document(message: Message):
-    await handle_file(message, 'document')
-
-async def handle_file(message: Message, file_type: str):
-    telegram_id = message.from_user.id
-    conn = sqlite3.connect("support.db", timeout=10)
-    cursor = conn.cursor()
-    cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
-    employee = cursor.fetchone()
-
     if not employee:
-        await message.reply("Вы не зарегистрированы. Пожалуйста, используйте команду /start и введите логин.")
-        conn.close()
+        await message.reply("Вы не авторизованы. Попросите администратора добавить ваш Telegram ID.")
         return
 
     login = employee[0]
     astana_tz = pytz.timezone('Asia/Almaty')
     timestamp = message.date.astimezone(astana_tz).isoformat()
 
+    conn = sqlite3.connect("support.db", timeout=10)
+    cursor = conn.cursor()
     cursor.execute(
         "SELECT ticket_id FROM tickets WHERE telegram_id = ? AND status = 'open'",
         (telegram_id,)
@@ -178,8 +294,8 @@ async def handle_file(message: Message, file_type: str):
 
     if is_new_ticket:
         cursor.execute(
-            "INSERT INTO tickets (telegram_id, status, created_at) VALUES (?, ?, ?)",
-            (telegram_id, "open", datetime.now(astana_tz).isoformat())
+            "INSERT INTO tickets (telegram_id, status, created_at, issue_type) VALUES (?, ?, ?, ?)",
+            (telegram_id, "open", datetime.now(astana_tz).isoformat(), None)
         )
         ticket_id = cursor.lastrowid
     else:
@@ -190,10 +306,10 @@ async def handle_file(message: Message, file_type: str):
         file_name = f"image_{int(time.time())}.jpg"
     else:
         file_name_original = message.document.file_name if message.document.file_name else 'document.txt'
-        file_name = get_unique_filename(file_name_original, directory="uploads")
-    file_path = f"uploads/{file_name}"
+        file_name = get_unique_filename(file_name_original, directory="Uploads")
+    file_path = f"Uploads/{file_name}"
 
-    os.makedirs("uploads", exist_ok=True)
+    os.makedirs("Uploads", exist_ok=True)
     file = await bot.get_file(file_id)
     await bot.download_file(file.file_path, file_path)
 
@@ -234,30 +350,40 @@ async def handle_file(message: Message, file_type: str):
             "last_message_timestamp": timestamp,
             "file_path": file_path,
             "file_name": file_name,
-            "file_type": file_type
+            "file_type": file_type,
+            "issue_type": None
         })
+        await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
         reply_text = "Обращение принято. Файл получен."
         if not is_working_hours():
             reply_text += "\n\nОбратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени."
         await message.reply(reply_text)
 
-@dp.message(F.content_type == ContentType.TEXT)
+@dp.message(F.text)
 async def handle_text_message(message: Message):
     telegram_id = message.from_user.id
+    if is_banned(telegram_id):
+        return
+    if is_muted(telegram_id):
+        await message.reply("Вам временно запрещено писать в бота!")
+        return
+
     conn = sqlite3.connect("support.db", timeout=10)
     cursor = conn.cursor()
     cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
     employee = cursor.fetchone()
+    conn.close()
 
     if not employee:
-        await message.reply("Вы не зарегистрированы. Пожалуйста, используйте команду /start и введите логин.")
-        conn.close()
+        await message.reply("Вы не авторизованы. Попросите администратора добавить ваш Telegram ID.")
         return
 
     login = employee[0]
     astana_tz = pytz.timezone('Asia/Almaty')
     timestamp = message.date.astimezone(astana_tz).isoformat()
 
+    conn = sqlite3.connect("support.db", timeout=10)
+    cursor = conn.cursor()
     cursor.execute(
         "SELECT ticket_id FROM tickets WHERE telegram_id = ? AND status = 'open'",
         (telegram_id,)
@@ -267,8 +393,8 @@ async def handle_text_message(message: Message):
 
     if is_new_ticket:
         cursor.execute(
-            "INSERT INTO tickets (telegram_id, status, created_at) VALUES (?, ?, ?)",
-            (telegram_id, "open", datetime.now(astana_tz).isoformat())
+            "INSERT INTO tickets (telegram_id, status, created_at, issue_type) VALUES (?, ?, ?, ?)",
+            (telegram_id, "open", datetime.now(astana_tz).isoformat(), None)
         )
         ticket_id = cursor.lastrowid
     else:
@@ -309,8 +435,10 @@ async def handle_text_message(message: Message):
             "telegram_id": telegram_id,
             "login": login,
             "last_message": message.text,
-            "last_message_timestamp": timestamp
+            "last_message_timestamp": timestamp,
+            "issue_type": None
         })
+        await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
         reply_text = "Обращение принято. При необходимости прикрепите скриншот или файл с логами."
         if not is_working_hours():
             reply_text += "\n\nОбратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени."
@@ -354,16 +482,31 @@ async def process_message_queue():
                 with open("error_log.txt", "a") as f:
                     f.write(f"[{datetime.now()}] Ошибка отправки {telegram_id}: {e}\n")
             finally:
-                message_queue.task_done()
+                message_queue.task_done
         except Exception as e:
             logging.error(f"Ошибка в обработке очереди: {e}")
             with open("error_log.txt", "a") as f:
                 f.write(f"[{datetime.now()}] Ошибка очереди: {e}\n")
-            await asyncio.sleep(1)
+        await asyncio.sleep(0.1)
+
+async def cleanup_expired():
+    while True:
+        await asyncio.sleep(3600)  # Каждые 60 минут
+        conn = sqlite3.connect("support.db", timeout=10)
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute("DELETE FROM mutes WHERE end_time < ?", (now,))
+        cursor.execute("DELETE FROM bans WHERE end_time IS NOT NULL AND end_time < ?", (now,))
+        conn.commit()
+        conn.close()
 
 async def on_startup():
-    print("Бот запущен!")
+    init_db()
+    loop = asyncio.get_event_loop()
+    set_event_loop(loop)
     asyncio.create_task(process_message_queue())
+    asyncio.create_task(cleanup_expired())
+    logging.debug("Бот запущен")
 
 async def run_bot():
     await on_startup()
@@ -374,7 +517,7 @@ async def main():
     loop = asyncio.get_event_loop()
     set_event_loop(loop)
     bot_task = asyncio.create_task(run_bot())
-    config = uvicorn.Config(app=socketio_app, host="0.0.0.0", port=8080, loop="asyncio")
+    config = uvicorn.Config(app=app, host="0.0.0.0", port=8080, loop="asyncio")
     server = uvicorn.Server(config)
     await asyncio.gather(bot_task, server.serve())
 

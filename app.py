@@ -1,10 +1,11 @@
-from fastapi import FastAPI, Request, Form, HTTPException, File, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, Form, HTTPException, Depends, File, UploadFile, Query
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 import socketio
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import logging
 from dotenv import load_dotenv
@@ -12,6 +13,10 @@ import os
 import pytz
 import time
 import re
+import hashlib
+import hmac
+import secrets
+from aiogram import Bot
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -20,16 +25,24 @@ logging.basicConfig(
 )
 
 load_dotenv()
+
 app = FastAPI()
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
-socketio_app = socketio.ASGIApp(sio, other_asgi_app=app)
+app.mount("/socket.io", socketio.ASGIApp(sio))
+
+templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/Uploads", StaticFiles(directory="Uploads"), name="uploads")
 
 message_queue = asyncio.Queue()
 loop = None
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+NOTIFICATION_CHAT_ID = os.getenv("NOTIFICATION_CHAT_ID")
+NOTIFICATION_TOPIC_ID = os.getenv("NOTIFICATION_TOPIC_ID")
+
+bot = Bot(token=BOT_TOKEN)
 
 def set_event_loop(event_loop):
     global loop
@@ -38,13 +51,141 @@ def set_event_loop(event_loop):
 
 db_lock = asyncio.Lock()
 
+def generate_session_token():
+    return secrets.token_urlsafe(32)
+
+def verify_telegram_auth(data: dict, bot_token: str) -> bool:
+    received_hash = data.pop("hash", None)
+    if not received_hash:
+        logging.error("Отсутствует hash в Telegram данных")
+        return False
+    
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(data.items()) if v)
+    secret_key = hashlib.sha256(bot_token.encode()).digest()
+    computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    logging.debug(f"Проверка подписи: computed_hash={computed_hash}, received_hash={received_hash}")
+    return computed_hash == received_hash
+
+async def get_current_user(request: Request):
+    session_token = request.cookies.get("session_token")
+    if not session_token:
+        logging.error("Отсутствует session_token в куки")
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT telegram_id, expires_at FROM sessions WHERE session_token = ?",
+        (session_token,)
+    )
+    session = cursor.fetchone()
+    if not session:
+        conn.close()
+        logging.error("Недействительный session_token")
+        raise HTTPException(status_code=401, detail="Invalid session")
+    
+    expires_at = datetime.fromisoformat(session["expires_at"])
+    if datetime.utcnow() > expires_at:
+        cursor.execute("DELETE FROM sessions WHERE session_token = ?", (session_token,))
+        conn.commit()
+        conn.close()
+        logging.error("Session_token истёк")
+        raise HTTPException(status_code=401, detail="Session expired")
+    
+    telegram_id = session["telegram_id"]
+    cursor.execute("SELECT login, is_admin FROM employees WHERE telegram_id = ?", (telegram_id,))
+    employee = cursor.fetchone()
+    if not employee:
+        conn.close()
+        logging.error(f"Сотрудник с telegram_id={telegram_id} не найден")
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if not employee["is_admin"]:
+        conn.close()
+        logging.error(f"Сотрудник с telegram_id={telegram_id} не является администратором")
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    new_expires_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    cursor.execute(
+        "UPDATE sessions SET expires_at = ? WHERE session_token = ?",
+        (new_expires_at, session_token)
+    )
+    conn.commit()
+    conn.close()
+    
+    logging.debug(f"Авторизован пользователь: telegram_id={telegram_id}, login={employee['login']}, is_admin={employee['is_admin']}")
+    return {"telegram_id": telegram_id, "login": employee['login'], "is_admin": employee['is_admin']}
+
+@app.get("/telegram-auth")
+async def telegram_auth(
+    id: str = Query(...),
+    first_name: str = Query(None),
+    last_name: str = Query(None),
+    username: str = Query(None),
+    photo_url: str = Query(None),
+    auth_date: str = Query(...),
+    hash: str = Query(...),
+):
+    bot_token = os.getenv("BOT_TOKEN")
+    if not bot_token:
+        logging.error("BOT_TOKEN не установлен в .env")
+        raise HTTPException(status_code=500, detail="Server configuration error")
+    
+    data = {
+        "id": id,
+        "first_name": first_name,
+        "last_name": last_name,
+        "username": username,
+        "photo_url": photo_url,
+        "auth_date": auth_date,
+        "hash": hash
+    }
+    logging.debug(f"Получены Telegram данные: {data}")
+    
+    if not verify_telegram_auth(data, bot_token):
+        logging.error("Неверная подпись Telegram")
+        raise HTTPException(status_code=403, detail="Неверная подпись Telegram")
+    
+    telegram_id = int(id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT login, is_admin FROM employees WHERE telegram_id = ?", (telegram_id,))
+    employee = cursor.fetchone()
+    if not employee:
+        conn.close()
+        logging.error(f"Сотрудник с telegram_id={telegram_id} не найден в базе")
+        raise HTTPException(status_code=403, detail="Вы не авторизованы. Попросите администратора добавить ваш Telegram ID.")
+    if not employee["is_admin"]:
+        conn.close()
+        logging.error(f"Сотрудник с telegram_id={telegram_id} не является администратором")
+        raise HTTPException(status_code=403, detail="Вы не авторизованы. Попросите администратора добавить ваш Telegram ID.")
+    
+    session_token = generate_session_token()
+    expires_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    cursor.execute(
+        "INSERT INTO sessions (session_token, telegram_id, expires_at) VALUES (?, ?, ?)",
+        (session_token, telegram_id, expires_at)
+    )
+    conn.commit()
+    conn.close()
+    
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=30 * 24 * 60 * 60
+    )
+    logging.debug(f"Установлен session_token в куки, редирект на /")
+    return response
+
 def get_db_connection():
     conn = sqlite3.connect("support.db", timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
-def get_unique_filename(filename: str, directory: str = "uploads"):
-    """Генерирует уникальное имя файла, заменяя специальные символы на '_' и добавляя суффикс при конфликте."""
+def get_unique_filename(filename: str, directory: str = "Uploads"):
     cleaned_filename = re.sub(r'[^\w\-\.]', '_', filename)
     cleaned_filename = re.sub(r'_+', '_', cleaned_filename).strip('_')
     base, ext = os.path.splitext(cleaned_filename)
@@ -56,8 +197,57 @@ def get_unique_filename(filename: str, directory: str = "uploads"):
     logging.debug(f"Сгенерировано уникальное имя файла: {filename} -> {new_filename}")
     return new_filename
 
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        logging.debug(f"Проверка авторизации для пути: {request.url.path}")
+        if request.url.path in ["/login", "/telegram-auth", "/static", "/Uploads"] or request.url.path.startswith(("/static/", "/Uploads/", "/socket.io")):
+            logging.debug(f"Путь {request.url.path} не требует авторизации")
+            return await call_next(request)
+        try:
+            employee = await get_current_user(request)
+            request.state.employee = employee
+            logging.debug(f"Авторизация успешна для telegram_id={employee['telegram_id']}")
+            return await call_next(request)
+        except HTTPException as e:
+            logging.error(f"Ошибка авторизации: {e.detail}")
+            return RedirectResponse(url="/login", status_code=303)
+
+app.add_middleware(AuthMiddleware)
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    logging.debug("Запрос к странице логина")
+    return templates.TemplateResponse("login.html", {"request": request})
+
+@app.get("/logout")
+async def logout(request: Request):
+    session_token = request.cookies.get("session_token")
+    if session_token:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM sessions WHERE session_token = ?", (session_token,))
+        conn.commit()
+        conn.close()
+        logging.debug(f"Сессия с session_token={session_token} удалена")
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie("session_token")
+    logging.debug("Запрос на выход, cookie удалены")
+    return response
+
+@app.post("/cleanup_sessions")
+async def cleanup_sessions():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    threshold = (datetime.utcnow() - timedelta(days=30)).isoformat()
+    cursor.execute("DELETE FROM sessions WHERE expires_at < ?", (threshold,))
+    deleted_count = cursor.rowcount
+    conn.commit()
+    conn.close()
+    logging.debug(f"Очищено {deleted_count} устаревших сессий")
+    return {"status": "ok", "deleted_count": deleted_count}
+
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+async def index(request: Request, employee: dict = Depends(get_current_user)):
     logging.debug("Запрос к главной странице /")
     async with db_lock:
         with get_db_connection() as conn:
@@ -65,7 +255,8 @@ async def index(request: Request):
             cursor.execute("""
                 SELECT t.ticket_id, t.telegram_id, e.login, 
                        m.text AS last_message, m.timestamp AS last_message_timestamp,
-                       a.file_path, a.file_name, a.file_type
+                       a.file_path, a.file_name, a.file_type,
+                       t.issue_type, t.assigned_to, e2.login AS assigned_login
                 FROM tickets t 
                 JOIN employees e ON t.telegram_id = e.telegram_id 
                 LEFT JOIN (
@@ -78,6 +269,7 @@ async def index(request: Request):
                     )
                 ) m ON t.ticket_id = m.ticket_id
                 LEFT JOIN attachments a ON m.message_id = a.message_id
+                LEFT JOIN employees e2 ON t.assigned_to = e2.telegram_id
                 WHERE t.status = 'open'
             """)
             astana_tz = pytz.timezone('Asia/Almaty')
@@ -89,23 +281,39 @@ async def index(request: Request):
                     "last_message_timestamp": datetime.fromisoformat(row["last_message_timestamp"]).astimezone(astana_tz).isoformat() if row["last_message_timestamp"] else None,
                     "file_path": row["file_path"],
                     "file_name": row["file_name"],
-                    "file_type": row["file_type"]
+                    "file_type": row["file_type"],
+                    "issue_type": row["issue_type"],
+                    "assigned_to": row["assigned_to"],
+                    "assigned_login": row["assigned_login"]
                 }
                 for row in cursor.fetchall()
             ]
-    return templates.TemplateResponse("index.html", {"request": request, "tickets": tickets})
+    return templates.TemplateResponse("index.html", {"request": request, "tickets": tickets, "employee": employee})
 
 @app.get("/ticket/{ticket_id}", response_class=HTMLResponse)
-async def ticket(request: Request, ticket_id: int):
+async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_current_user)):
     logging.debug(f"Запрос к тикету #{ticket_id}")
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT telegram_id FROM tickets WHERE ticket_id = ?", (ticket_id,))
+    cursor.execute("SELECT telegram_id, issue_type, assigned_to FROM tickets WHERE ticket_id = ?", (ticket_id,))
     ticket_data = cursor.fetchone()
     if not ticket_data:
         conn.close()
         raise HTTPException(status_code=404, detail="Ticket not found")
-    telegram_id = ticket_data[0]
+    telegram_id = ticket_data["telegram_id"]
+    issue_type = ticket_data["issue_type"]
+    assigned_to = ticket_data["assigned_to"]
+
+    if not assigned_to:
+        cursor.execute("UPDATE tickets SET assigned_to = ? WHERE ticket_id = ?", (employee["telegram_id"], ticket_id))
+        conn.commit()
+        assigned_to = employee["telegram_id"]
+        await sio.emit("ticket_assigned", {
+            "ticket_id": ticket_id,
+            "assigned_to": employee["telegram_id"],
+            "assigned_login": employee["login"]
+        })
+
     cursor.execute(
         """
         SELECT m.message_id, m.ticket_id, m.telegram_id, m.text, m.is_from_bot, m.timestamp, e.login,
@@ -134,29 +342,93 @@ async def ticket(request: Request, ticket_id: int):
         }
         for row in cursor.fetchall()
     ]
+    cursor.execute(
+        """
+        SELECT am.message_id, am.ticket_id, am.telegram_id, am.text, am.timestamp, e.login
+        FROM admin_messages am
+        JOIN employees e ON am.telegram_id = e.telegram_id
+        WHERE am.ticket_id = ?
+        ORDER BY am.timestamp
+        """,
+        (ticket_id,)
+    )
+    admin_messages = [
+        {
+            "message_id": row[0],
+            "ticket_id": row[1],
+            "telegram_id": row[2],
+            "text": row[3],
+            "timestamp": datetime.fromisoformat(row[4]).astimezone(astana_tz).isoformat(),
+            "login": row[5]
+        }
+        for row in cursor.fetchall()
+    ]
     cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
-    employee = cursor.fetchone()
-    login = employee[0] if employee else "Unknown"
+    employee_data = cursor.fetchone()
+    login = employee_data[0] if employee_data else "Unknown"
+    cursor.execute("SELECT telegram_id, login FROM employees WHERE is_admin = 1")
+    support_employees = [{"telegram_id": row["telegram_id"], "login": row["login"]} for row in cursor.fetchall()]
+
+    # Check mute status
+    cursor.execute("SELECT end_time FROM mutes WHERE user_id = ?", (telegram_id,))
+    mute_data = cursor.fetchone()
+    is_muted = False
+    mute_end_time = None
+    if mute_data:
+        end_time = mute_data["end_time"]
+        if end_time and datetime.fromisoformat(end_time) > datetime.now():
+            is_muted = True
+            mute_end_time = end_time
+
+    # Check ban status
+    cursor.execute("SELECT end_time FROM bans WHERE user_id = ?", (telegram_id,))
+    ban_data = cursor.fetchone()
+    is_banned = False
+    ban_end_time = None
+    if ban_data:
+        end_time = ban_data["end_time"]
+        if end_time is None or datetime.fromisoformat(end_time) > datetime.now():
+            is_banned = True
+            ban_end_time = end_time
+
     conn.close()
     return templates.TemplateResponse(
         "ticket.html",
-        {"request": request, "ticket_id": ticket_id, "messages": messages, "telegram_id": telegram_id, "login": login}
+        {
+            "request": request,
+            "ticket_id": ticket_id,
+            "messages": messages,
+            "admin_messages": admin_messages,
+            "telegram_id": telegram_id,
+            "login": login,
+            "employee": employee,
+            "issue_type": issue_type,
+            "assigned_to": assigned_to,
+            "support_employees": support_employees,
+            "is_muted": is_muted,
+            "mute_end_time": mute_end_time,
+            "is_banned": is_banned,
+            "ban_end_time": ban_end_time
+        }
     )
 
 @app.post("/send_message")
 async def send_message(
+    request: Request,
     ticket_id: int = Form(...),
     telegram_id: int = Form(...),
     text: str = Form(None),
-    file: UploadFile = File(None)
+    file: UploadFile = File(None),
+    issue_type: str = Form(None),
+    employee: dict = Depends(get_current_user)
 ):
     try:
-        logging.debug(f"Отправка сообщения: ticket_id={ticket_id}, telegram_id={telegram_id}, text={text}, file={file.filename if file else None}")
+        logging.debug(f"Отправка сообщения: ticket_id={ticket_id}, telegram_id={telegram_id}, text={text}, file={file.filename if file else None}, issue_type={issue_type}")
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
-        employee = cursor.fetchone()
-        if not employee:
+        employee_data = cursor.fetchone()
+        if not employee_data:
             conn.close()
             logging.error(f"Неверный telegram_id: {telegram_id}")
             raise HTTPException(status_code=400, detail="Invalid telegram_id")
@@ -164,7 +436,6 @@ async def send_message(
         astana_tz = pytz.timezone('Asia/Almaty')
         timestamp = datetime.now(astana_tz).isoformat()
         
-        # Текст для базы данных и веб-интерфейса (для сотрудников техподдержки)
         db_text = text if text else ""
         if file and file.filename:
             db_text = f"[Файл] {file.filename}" if not text else text
@@ -185,10 +456,10 @@ async def send_message(
                 file_name = f"image_{int(time.time())}{os.path.splitext(file.filename)[1]}"
             else:
                 file_name = file.filename
-            file_name = get_unique_filename(file_name, directory="uploads")
-            file_path = f"uploads/{file_name}"
+            file_name = get_unique_filename(file_name, directory="Uploads")
+            file_path = f"Uploads/{file_name}"
             try:
-                os.makedirs("uploads", exist_ok=True)
+                os.makedirs("Uploads", exist_ok=True)
                 with open(file_path, "wb") as f:
                     f.write(await file.read())
                 logging.debug(f"Файл сохранен: {file_path}")
@@ -208,6 +479,17 @@ async def send_message(
                 conn.close()
                 raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
+        if issue_type in ["tech", "org", "ins", "n/a"]:
+            db_issue_type = None if issue_type == "n/a" else issue_type
+            cursor.execute(
+                "UPDATE tickets SET issue_type = ? WHERE ticket_id = ?",
+                (db_issue_type, ticket_id)
+            )
+            await sio.emit("issue_type_updated", {
+                "ticket_id": ticket_id,
+                "issue_type": db_issue_type
+            })
+
         conn.commit()
         conn.close()
         logging.debug(f"Сообщение сохранено в базе данных: ticket_id={ticket_id}")
@@ -216,7 +498,6 @@ async def send_message(
             logging.error("Цикл событий не инициализирован")
             raise HTTPException(status_code=500, detail="Event loop not initialized")
 
-        # Текст для отправки в Telegram (без автоматической подписи)
         telegram_text = text if text else ""
         queue_data = {"telegram_id": telegram_id, "text": telegram_text}
         if file_path:
@@ -233,7 +514,7 @@ async def send_message(
             "text": db_text,
             "is_from_bot": True,
             "timestamp": timestamp,
-            "login": "Bot",
+            "login": employee["login"],
             "file_path": file_path,
             "file_name": file_name,
             "file_type": file_type
@@ -245,8 +526,51 @@ async def send_message(
         logging.error(f"Ошибка при отправке сообщения: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/send_admin_message")
+async def send_admin_message(
+    request: Request,
+    ticket_id: int = Form(...),
+    text: str = Form(...),
+    employee: dict = Depends(get_current_user)
+):
+    try:
+        logging.debug(f"Отправка сообщения в админ-чат: ticket_id={ticket_id}, text={text}")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT telegram_id FROM tickets WHERE ticket_id = ?", (ticket_id,))
+        ticket_data = cursor.fetchone()
+        if not ticket_data:
+            conn.close()
+            logging.error(f"Тикет #{ticket_id} не найден")
+            raise HTTPException(status_code=404, detail="Ticket not found")
+
+        astana_tz = pytz.timezone('Asia/Almaty')
+        timestamp = datetime.now(astana_tz).isoformat()
+        
+        cursor.execute(
+            "INSERT INTO admin_messages (ticket_id, telegram_id, text, timestamp) VALUES (?, ?, ?, ?)",
+            (ticket_id, employee["telegram_id"], text, timestamp)
+        )
+        conn.commit()
+        conn.close()
+        logging.debug(f"Сообщение в админ-чат сохранено: ticket_id={ticket_id}")
+
+        await sio.emit("new_admin_message", {
+            "ticket_id": ticket_id,
+            "telegram_id": employee["telegram_id"],
+            "text": text,
+            "timestamp": timestamp,
+            "login": employee["login"]
+        })
+        logging.debug("Уведомление о новом сообщении в админ-чате отправлено через SocketIO")
+
+        return {"status": "ok"}
+    except Exception as e:
+        logging.error(f"Ошибка при отправке сообщения в админ-чат: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/close_ticket")
-async def close_ticket(ticket_id: int = Form(...)):
+async def close_ticket(request: Request, ticket_id: int = Form(...), employee: dict = Depends(get_current_user)):
     try:
         logging.debug(f"Закрытие тикета #{ticket_id}")
         conn = get_db_connection()
@@ -282,20 +606,89 @@ async def close_ticket(ticket_id: int = Form(...)):
         logging.error(f"Ошибка при закрытии тикета: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+async def send_notification_to_topic(ticket_id: int, login: str, message: str):
+    if NOTIFICATION_CHAT_ID and NOTIFICATION_TOPIC_ID:
+        try:
+            await bot.send_message(
+                chat_id=NOTIFICATION_CHAT_ID,
+                message_thread_id=int(NOTIFICATION_TOPIC_ID),
+                text=f"Тикет #{ticket_id} ({login}): {message}"
+            )
+            logging.debug(f"Уведомление отправлено в чат {NOTIFICATION_CHAT_ID}, топик {NOTIFICATION_TOPIC_ID}: {message}")
+        except Exception as e:
+            logging.error(f"Ошибка отправки уведомления в чат {NOTIFICATION_CHAT_ID}, топик {NOTIFICATION_TOPIC_ID}: {e}")
+
 @app.post("/assign_ticket")
-async def assign_ticket_endpoint(ticket_id: int = Form(...), employee_id: int = Form(...)):
+async def assign_ticket_endpoint(
+    request: Request, 
+    ticket_id: int = Form(...), 
+    assigned_to: int = Form(...), 
+    employee: dict = Depends(get_current_user)
+):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (assigned_to,))
+        employee_data = cursor.fetchone()
+        if not employee_data:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Invalid assigned_to telegram_id")
+        assigned_login = employee_data[0]
+
+        cursor.execute("UPDATE tickets SET assigned_to = ? WHERE ticket_id = ?", (assigned_to, ticket_id))
+        if cursor.rowcount == 0:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        conn.commit()
+        conn.close()
+
+        await sio.emit("ticket_assigned", {
+            "ticket_id": ticket_id,
+            "assigned_to": assigned_to,
+            "assigned_login": assigned_login
+        })
+
+        await send_notification_to_topic(ticket_id, assigned_login, f"Тикет переназначен на {assigned_login}")
+        try:
+            await bot.send_message(
+                chat_id=assigned_to,
+                text=f"Вам назначен тикет #{ticket_id}. Проверьте: http://localhost:8080/ticket/{ticket_id}"
+            )
+            logging.debug(f"Персональное уведомление отправлено сотруднику {assigned_to} о назначении тикета #{ticket_id}")
+        except Exception as e:
+            logging.error(f"Ошибка отправки персонального уведомления сотруднику {assigned_to}: {e}")
+
+        return {"status": "ok", "assigned_to": assigned_login}
+    except Exception as e:
+        logging.error(f"Ошибка при переназначении тикета: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/update_issue_type")
+async def update_issue_type(
+    request: Request,
+    ticket_id: int = Form(...),
+    issue_type: str = Form(...),
+    employee: dict = Depends(get_current_user)
+):
+    if issue_type not in ["tech", "org", "ins", "n/a"]:
+        raise HTTPException(status_code=400, detail="Invalid issue type")
+    db_issue_type = None if issue_type == "n/a" else issue_type
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE tickets SET assigned_to = ? WHERE ticket_id = ?", (employee_id, ticket_id))
-    cursor.execute("SELECT login FROM employees WHERE id = ?", (employee_id,))
-    employee = cursor.fetchone()
+    cursor.execute("UPDATE tickets SET issue_type = ? WHERE ticket_id = ?", (db_issue_type, ticket_id))
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Ticket not found")
     conn.commit()
     conn.close()
-    await sio.emit("ticket_assigned", {"ticket_id": ticket_id, "assigned_to": employee[0] if employee else "Unknown"})
-    return {"status": "ok", "assigned_to": employee[0] if employee else "Unknown"}
+    await sio.emit("issue_type_updated", {
+        "ticket_id": ticket_id,
+        "issue_type": db_issue_type
+    })
+    return {"status": "ok"}
 
 @app.post("/cleanup")
-async def cleanup():
+async def cleanup(request: Request, employee: dict = Depends(get_current_user)):
     from dateutil.relativedelta import relativedelta
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -307,7 +700,12 @@ async def cleanup():
     return {"status": "ok"}
 
 @app.post("/fetch_telegram_history")
-async def fetch_telegram_history(ticket_id: int = Form(...), telegram_id: int = Form(...)):
+async def fetch_telegram_history(
+    request: Request, 
+    ticket_id: int = Form(...), 
+    telegram_id: int = Form(...), 
+    employee: dict = Depends(get_current_user)
+):
     try:
         logging.debug(f"Подтягивание истории для ticket_id={ticket_id}, telegram_id={telegram_id}")
         
@@ -372,10 +770,7 @@ async def fetch_telegram_history(ticket_id: int = Form(...), telegram_id: int = 
         ]
 
         cursor.execute(
-            """
-            INSERT INTO history_fetched (current_ticket_id, fetched_ticket_id, fetched_at)
-            VALUES (?, ?, ?)
-            """,
+            "INSERT INTO history_fetched (current_ticket_id, fetched_ticket_id, fetched_at) VALUES (?, ?, ?)",
             (ticket_id, fetched_ticket_id, datetime.now(astana_tz).isoformat())
         )
         conn.commit()
@@ -390,6 +785,142 @@ async def fetch_telegram_history(ticket_id: int = Form(...), telegram_id: int = 
     except Exception as e:
         logging.error(f"Ошибка при подтягивании истории: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/employees", response_class=HTMLResponse)
+async def admin_employees(request: Request, employee: dict = Depends(get_current_user)):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT telegram_id, login, is_admin FROM employees")
+    employees = [
+        {
+            "telegram_id": row["telegram_id"],
+            "login": row["login"],
+            "is_admin": row["is_admin"]
+        }
+        for row in cursor.fetchall()
+    ]
+    conn.close()
+    return templates.TemplateResponse("admin_employees.html", {"request": request, "employees": employees, "employee": employee})
+
+@app.post("/admin/employees/add")
+async def add_employee(
+    request: Request,
+    telegram_id: str = Form(...),
+    login: str = Form(...),
+    is_admin: bool = Form(False),
+    employee: dict = Depends(get_current_user)
+):
+    try:
+        telegram_id = int(telegram_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Некорректный Telegram ID")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO employees (telegram_id, login, is_admin) VALUES (?, ?, ?)",
+            (telegram_id, login, is_admin)
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Этот Telegram ID или логин уже занят")
+    conn.close()
+    return RedirectResponse(url="/admin/employees", status_code=303)
+
+@app.post("/admin/employees/delete")
+async def delete_employee(request: Request, telegram_id: str = Form(...), employee: dict = Depends(get_current_user)):
+    try:
+        telegram_id = int(telegram_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Некорректный Telegram ID")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM employees WHERE telegram_id = ?", (telegram_id,))
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Сотрудник не найден")
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/admin/employees", status_code=303)
+
+@app.post("/mute_user")
+async def mute_user(
+    request: Request,
+    ticket_id: int = Form(...),
+    telegram_id: int = Form(...),
+    mute_duration: int = Form(...),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    end_time = (datetime.now() + timedelta(minutes=mute_duration)).isoformat()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO mutes (user_id, end_time) VALUES (?, ?)", (telegram_id, end_time))
+    conn.commit()
+    conn.close()
+    logging.debug(f"Пользователь {telegram_id} замучен на {mute_duration} минут")
+    return {"status": "ok"}
+
+@app.post("/ban_user")
+async def ban_user(
+    request: Request,
+    ticket_id: int = Form(...),
+    telegram_id: int = Form(...),
+    ban_duration: int = Form(None),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    end_time = (datetime.now() + timedelta(minutes=ban_duration)).isoformat() if ban_duration else None
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO bans (user_id, end_time) VALUES (?, ?)", (telegram_id, end_time))
+    conn.commit()
+    conn.close()
+    logging.debug(f"Пользователь {telegram_id} забанен на {ban_duration if ban_duration else 'навсегда'} минут")
+    return {"status": "ok"}
+
+@app.post("/unmute_user")
+async def unmute_user(
+    request: Request,
+    ticket_id: int = Form(...),
+    telegram_id: int = Form(...),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM mutes WHERE user_id = ?", (telegram_id,))
+    conn.commit()
+    conn.close()
+    logging.debug(f"Мут снят с пользователя {telegram_id}")
+    return {"status": "ok"}
+
+@app.post("/unban_user")
+async def unban_user(
+    request: Request,
+    ticket_id: int = Form(...),
+    telegram_id: int = Form(...),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM bans WHERE user_id = ?", (telegram_id,))
+    conn.commit()
+    conn.close()
+    logging.debug(f"Бан снят с пользователя {telegram_id}")
+    return {"status": "ok"}
 
 @sio.event
 async def new_ticket(sid, data):
