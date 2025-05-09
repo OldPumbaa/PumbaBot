@@ -3,8 +3,21 @@
 <head>
     <title>Тикет #{{ ticket_id }}</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css" integrity="sha512-Kc323vGBEqzTmouAECnVceyQqyqdsSiqLQISBL29aUW4U/M7pSPA/gEUZQqv1cwx4OnYxTxve5UMg5GT6L4JJg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
     <style>
+        .edit-message-btn, .delete-message-btn {
+            font-size: 0.625rem;
+            color: #6b7280;
+            opacity: 0.5;
+            transition: opacity 0.2s, background-color 0.2s;
+            padding: 1px;
+            border-radius: 3px;
+        }
+        .edit-message-btn:hover, .delete-message-btn:hover {
+            opacity: 0.8;
+            background-color: rgba(0, 0, 0, 0.05);
+        }
         .message-text {
             line-height: 1;
             margin: 0;
@@ -12,7 +25,7 @@
             font-size: 0.875rem;
         }
         .chat-container {
-            height: 384px; /* Matches Tailwind's h-96 */
+            height: 384px;
             overflow-y: auto;
         }
         .modal {
@@ -45,6 +58,19 @@
             color: black;
             text-decoration: none;
             cursor: pointer;
+        }
+        .message-actions {
+            display: inline-flex;
+            align-items: center;
+            margin-right: 0.5rem;
+            vertical-align: top;
+        }
+        .message-container {
+            display: flex;
+            align-items: flex-start;
+        }
+        .message-text-container {
+            display: inline-block;
         }
     </style>
 </head>
@@ -104,24 +130,36 @@
         <div class="w-3/4">
             <div id="messages" class="border p-4 mb-4 chat-container">
                 {% for message in messages %}
-                <div class="message-container {% if message.is_from_bot %}text-right{% else %}text-left{% endif %} mb-2">
-                    <p class="message-text inline-block bg-{% if message.text.startswith('[Тикет #') %}yellow-200{% else %}{% if message.is_from_bot %}blue-200{% else %}gray-200{% endif %}{% endif %} px-2 rounded whitespace-pre-wrap">
-                        {{ message.login }}: {{ message.text }}
-                        {% if message.file_type %}
-                        {% if message.file_type == 'image' %}
-                        <img src="/{{ message.file_path }}" alt="{{ message.file_name }}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/{{ message.file_path }}')">
-                        {% else %}
-                        <a href="/{{ message.file_path }}" class="inline-block text-blue-500 underline">
-                            {% if message.file_name|length > 20 %}
-                            {{ message.file_name[:17] + '...' }}
+                <div class="message-container {% if message.is_from_bot %}justify-end{% else %}justify-start{% endif %} mb-2" id="message-{{ message.message_id }}">
+                    {% if message.is_from_bot %}
+                    <div class="message-actions">
+                        <span class="edit-message-btn cursor-pointer" data-message-id="{{ message.message_id }}" data-ticket-id="{{ ticket_id }}" data-text="{{ message.text }}" title="Редактировать">
+                            <i class="fas fa-edit"></i>
+                        </span>
+                        <span class="delete-message-btn cursor-pointer ml-1" data-message-id="{{ message.message_id }}" data-ticket-id="{{ ticket_id }}" title="Удалить">
+                            <i class="fas fa-trash"></i>
+                        </span>
+                    </div>
+                    {% endif %}
+                    <div class="message-text-container">
+                        <p class="message-text bg-{% if message.text.startswith('[Тикет #') %}yellow-200{% else %}{% if message.is_from_bot %}blue-200{% else %}gray-200{% endif %}{% endif %} px-2 rounded whitespace-pre-wrap">
+                            {{ message.login }}: {{ message.text }}
+                            {% if message.file_type %}
+                            {% if message.file_type == 'image' %}
+                            <img src="/{{ message.file_path }}" alt="{{ message.file_name }}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/{{ message.file_path }}')">
                             {% else %}
-                            {{ message.file_name }}
+                            <a href="/{{ message.file_path }}" class="inline-block text-blue-500 underline">
+                                {% if message.file_name|length > 20 %}
+                                {{ message.file_name[:17] + '...' }}
+                                {% else %}
+                                {{ message.file_name }}
+                                {% endif %}
+                            </a>
                             {% endif %}
-                        </a>
-                        {% endif %}
-                        {% endif %}
-                        <span class="timestamp text-xs text-gray-500"> ({{ message.timestamp }})</span>
-                    </p>
+                            {% endif %}
+                            <span class="timestamp text-xs text-gray-500"> ({{ message.timestamp }})</span>
+                        </p>
+                    </div>
                 </div>
                 {% endfor %}
             </div>
@@ -189,6 +227,20 @@
         </div>
     </div>
 
+    <!-- Модальное окно для редактирования сообщения -->
+    <div id="editMessageModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('editMessageModal')">&times;</span>
+            <h2>Редактировать сообщение</h2>
+            <form id="edit-message-form" class="mt-4">
+                <input type="hidden" name="message_id" id="edit-message-id">
+                <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
+                <textarea name="text" id="edit-message-text" class="w-full p-2 border rounded min-h-[60px] max-h-[100px] overflow-y-auto resize-none" rows="3"></textarea>
+                <button type="submit" class="bg-blue-500 text-white p-2 rounded mt-2">Сохранить</button>
+            </form>
+        </div>
+    </div>
+
     <div id="imageModal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center hidden">
         <div class="relative max-w-full max-h-screen">
             <img id="modalImage" src="" class="max-w-full max-h-screen">
@@ -213,6 +265,7 @@
         socket.on('connect', () => {
             console.log('Подключено к SocketIO');
         });
+
         socket.on('new_message', (data) => {
             console.log('Новое сообщение:', data);
             if (!data.ticket_id || !data.text || !data.timestamp) {
@@ -221,20 +274,33 @@
             }
             const messagesDiv = document.getElementById('messages');
             const messageDiv = document.createElement('div');
-            messageDiv.className = `message-container ${data.is_from_bot ? 'text-right' : 'text-left'} mb-2`;
+            messageDiv.className = `message-container ${data.is_from_bot ? 'justify-end' : 'justify-start'} mb-2`;
+            messageDiv.id = `message-${data.message_id}`;
             const isHistoryMessage = data.text.startsWith('[Тикет #');
             messageDiv.innerHTML = `
-                <p class="message-text inline-block bg-${isHistoryMessage ? 'yellow-200' : (data.is_from_bot ? 'blue-200' : 'gray-200')} px-2 rounded whitespace-pre-wrap">
-                    ${data.login || 'Unknown'}: ${data.text}
-                    ${data.file_type ? `
-                        ${data.file_type === 'image' ? `
-                            <img src="/${data.file_path || ''}" alt="${data.file_name || 'image'}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/${data.file_path || ''}')">
-                        ` : `
-                            <a href="/${data.file_path || ''}" class="inline-block text-blue-500 underline">${shortenFilename(data.file_name)}</a>
-                        `}
-                    ` : ''}
-                    <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
-                </p>
+                ${data.is_from_bot ? `
+                <div class="message-actions">
+                    <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" data-text="${data.text}" title="Редактировать">
+                        <i class="fas fa-edit"></i>
+                    </span>
+                    <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" title="Удалить">
+                        <i class="fas fa-trash"></i>
+                    </span>
+                </div>
+                ` : ''}
+                <div class="message-text-container">
+                    <p class="message-text bg-${isHistoryMessage ? 'yellow-200' : (data.is_from_bot ? 'blue-200' : 'gray-200')} px-2 rounded whitespace-pre-wrap">
+                        ${data.login || 'Unknown'}: ${data.text}
+                        ${data.file_type ? `
+                            ${data.file_type === 'image' ? `
+                                <img src="/${data.file_path || ''}" alt="${data.file_name || 'image'}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/${data.file_path || ''}')">
+                            ` : `
+                                <a href="/${data.file_path || ''}" class="inline-block text-blue-500 underline">${shortenFilename(data.file_name)}</a>
+                            `}
+                        ` : ''}
+                        <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
+                    </p>
+                </div>
             `;
             if (isHistoryMessage) {
                 messagesDiv.prepend(messageDiv);
@@ -245,7 +311,9 @@
                     messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
                 }
             }
+            bindMessageActions();
         });
+
         socket.on('new_admin_message', (data) => {
             console.log('Новое сообщение в админ-чате:', data);
             if (data.ticket_id === {{ ticket_id }}) {
@@ -265,26 +333,119 @@
                 }
             }
         });
+
         socket.on('no_more_history', (data) => {
-            console.log('Нет больше истории:', data);
             if (data.ticket_id === {{ ticket_id }}) {
-                alert('Больше истории нет');
+                showNotification('Больше истории нет', 'info');
+                document.getElementById('fetch-history-btn').disabled = true;
             }
         });
+
         socket.on('ticket_assigned', (data) => {
-            console.log('Тикет назначен:', data);
             if (data.ticket_id === {{ ticket_id }}) {
                 const assignSelect = document.getElementById('assign-to-select');
                 assignSelect.value = data.assigned_to || '';
             }
         });
+
         socket.on('issue_type_updated', (data) => {
-            console.log('Тип тикета обновлен:', data);
             if (data.ticket_id === {{ ticket_id }}) {
                 const issueTypeSelect = document.getElementById('issue-type-select');
                 issueTypeSelect.value = data.issue_type || 'n/a';
             }
         });
+
+        socket.on('ticket_closed', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                window.location.href = '/';
+            }
+        });
+
+        socket.on('message_deleted', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                const messageDiv = document.getElementById(`message-${data.message_id}`);
+                if (messageDiv) {
+                    messageDiv.remove();
+                    showNotification('Сообщение удалено', 'success');
+                }
+            }
+        });
+
+        socket.on('message_edited', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                const messageDiv = document.getElementById(`message-${data.message_id}`);
+                if (messageDiv) {
+                    messageDiv.innerHTML = `
+                        <div class="message-actions">
+                            <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" data-text="${data.text}" title="Редактировать">
+                                <i class="fas fa-edit"></i>
+                            </span>
+                            <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" title="Удалить">
+                                <i class="fas fa-trash"></i>
+                            </span>
+                        </div>
+                        <div class="message-text-container">
+                            <p class="message-text bg-blue-200 px-2 rounded whitespace-pre-wrap">
+                                ${data.login || 'Unknown'}: ${data.text}
+                                <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
+                            </p>
+                        </div>
+                    `;
+                    bindMessageActions();
+                    showNotification('Сообщение обновлено', 'success');
+                }
+            }
+        });
+
+        function showNotification(message, type) {
+            const notification = document.createElement('div');
+            notification.className = `fixed bottom-4 right-4 p-4 rounded text-white ${type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : 'bg-blue-500'}`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            setTimeout(() => notification.remove(), 3000);
+        }
+
+        function bindMessageActions() {
+            document.querySelectorAll('.edit-message-btn').forEach(button => {
+                button.removeEventListener('click', handleEditClick); // Prevent duplicate listeners
+                button.addEventListener('click', handleEditClick);
+            });
+            document.querySelectorAll('.delete-message-btn').forEach(button => {
+                button.removeEventListener('click', handleDeleteClick); // Prevent duplicate listeners
+                button.addEventListener('click', handleDeleteClick);
+            });
+        }
+
+        function handleEditClick() {
+            const messageId = this.dataset.messageId;
+            const text = this.dataset.text;
+            document.getElementById('edit-message-id').value = messageId;
+            document.getElementById('edit-message-text').value = text;
+            openModal('editMessageModal');
+        }
+
+        function handleDeleteClick() {
+            const messageId = this.dataset.messageId;
+            const ticketId = this.dataset.ticketId;
+            if (confirm('Вы уверены, что хотите удалить это сообщение?')) {
+                const formData = new FormData();
+                formData.append('message_id', messageId);
+                formData.append('ticket_id', ticketId);
+                fetch('/delete_message', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status !== 'ok') {
+                        throw new Error(data.detail || 'Ошибка удаления сообщения');
+                    }
+                })
+                .catch(error => {
+                    showNotification(error.message, 'error');
+                });
+            }
+        }
 
         function sendMessage(form) {
             const formData = new FormData(form);
@@ -292,10 +453,8 @@
             const issueType = document.getElementById('issue-type-select').value;
             formData.append('issue_type', issueType);
             if (!text && !formData.get('file')) {
-                console.log('Пустое сообщение, отправка предотвращена');
                 return;
             }
-            console.log('Отправка формы:', Object.fromEntries(formData));
             fetch('/send_message', {
                 method: 'POST',
                 body: formData
@@ -303,18 +462,15 @@
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'ok') {
-                    console.log('Сообщение отправлено');
                     form.reset();
                     const messagesDiv = document.getElementById('messages');
                     messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
                 } else {
-                    console.error('Ошибка:', data.message);
-                    alert('Ошибка отправки сообщения: ' + data.message);
+                    showNotification('Ошибка отправки сообщения: ' + data.message, 'error');
                 }
             })
             .catch(error => {
-                console.error('Ошибка:', error);
-                alert('Ошибка отправки сообщения');
+                showNotification('Ошибка отправки сообщения', 'error');
             });
         }
 
@@ -322,10 +478,8 @@
             const formData = new FormData(form);
             const text = formData.get('text').trim();
             if (!text) {
-                console.log('Пустое сообщение в админ-чате, отправка предотвращена');
                 return;
             }
-            console.log('Отправка сообщения в админ-чат:', Object.fromEntries(formData));
             fetch('/send_admin_message', {
                 method: 'POST',
                 body: formData
@@ -333,18 +487,15 @@
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'ok') {
-                    console.log('Сообщение в админ-чат отправлено');
                     form.reset();
                     const adminMessagesDiv = document.getElementById('admin-messages');
                     adminMessagesDiv.scrollTo({ top: adminMessagesDiv.scrollHeight, behavior: 'smooth' });
                 } else {
-                    console.error('Ошибка:', data.message);
-                    alert('Ошибка отправки сообщения в админ-чат: ' + data.message);
+                    showNotification('Ошибка отправки сообщения в админ-чат: ' + data.message, 'error');
                 }
             })
             .catch(error => {
-                console.error('Ошибка:', error);
-                alert('Ошибка отправки сообщения в админ-чат');
+                showNotification('Ошибка отправки сообщения в админ-чат', 'error');
             });
         }
 
@@ -361,7 +512,6 @@
         document.getElementById('admin-message-input').addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                console.log('Нажат Enter в админ-чате, инициируем отправку');
                 const form = document.getElementById('send-admin-message-form');
                 sendAdminMessage(form);
             }
@@ -370,7 +520,6 @@
         document.getElementById('message-input').addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                console.log('Нажат Enter, инициируем отправку');
                 const form = document.getElementById('send-message-form');
                 sendMessage(form);
             }
@@ -385,14 +534,31 @@
             })
             .then(response => response.json())
             .then(data => {
-                if (data.status === 'ok') {
-                    console.log('Тикет закрыт');
-                    window.location.href = '/';
-                } else {
-                    console.error('Ошибка:', data.message);
+                if (data.status !== 'ok') {
+                    showNotification('Ошибка закрытия тикета: ' + data.message, 'error');
                 }
             })
-            .catch(error => console.error('Ошибка:', error));
+            .catch(error => showNotification('Ошибка закрытия тикета', 'error'));
+        });
+
+        document.getElementById('edit-message-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            fetch('/edit_message', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    closeModal('editMessageModal');
+                } else {
+                    showNotification('Ошибка редактирования сообщения: ' + data.detail, 'error');
+                }
+            })
+            .catch(error => {
+                showNotification('Ошибка редактирования сообщения', 'error');
+            });
         });
 
         document.getElementById('fetch-history-btn').addEventListener('click', () => {
@@ -407,15 +573,12 @@
             .then(data => {
                 if (data.status === 'ok') {
                     console.log(`История подтянута из тикета #${data.fetched_ticket_id}`);
-                } else if (data.status === 'no_more_history') {
-                    console.log('Больше истории нет');
-                } else {
-                    console.error('Ошибка:', data.message);
+                } else if (data.status !== 'no_more_history') {
+                    showNotification('Ошибка подтягивания истории: ' + data.message, 'error');
                 }
             })
             .catch(error => {
-                console.error('Ошибка:', error);
-                alert('Не удалось подтянуть историю. Попробуйте позже.');
+                showNotification('Не удалось подтянуть историю', 'error');
             });
         });
 
@@ -429,13 +592,11 @@
             })
             .then(response => response.json())
             .then(data => {
-                if (data.status === 'ok') {
-                    console.log('Тип тикета обновлен');
-                } else {
-                    console.error('Ошибка:', data.message);
+                if (data.status !== 'ok') {
+                    showNotification('Ошибка обновления типа тикета: ' + data.message, 'error');
                 }
             })
-            .catch(error => console.error('Ошибка:', error));
+            .catch(error => showNotification('Ошибка обновления типа тикета', 'error'));
         });
 
         document.getElementById('assign-to-select').addEventListener('change', (e) => {
@@ -448,16 +609,13 @@
             })
             .then(response => response.json())
             .then(data => {
-                if (data.status === 'ok') {
-                    console.log('Тикет переназначен');
-                } else {
-                    console.error('Ошибка:', data.message);
+                if (data.status !== 'ok') {
+                    showNotification('Ошибка назначения тикета: ' + data.message, 'error');
                 }
             })
-            .catch(error => console.error('Ошибка:', error));
+            .catch(error => showNotification('Ошибка назначения тикета', 'error'));
         });
 
-        // Управление модальными окнами
         function openModal(modalId) {
             document.getElementById(modalId).style.display = 'block';
         }
@@ -481,14 +639,14 @@
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'ok') {
-                    alert('Пользователь замучен');
+                    showNotification('Пользователь замучен', 'success');
                     closeModal('muteModal');
                     location.reload();
                 } else {
-                    alert('Ошибка: ' + data.message);
+                    showNotification('Ошибка: ' + data.message, 'error');
                 }
             })
-            .catch(error => console.error('Ошибка:', error));
+            .catch(error => showNotification('Ошибка мута пользователя', 'error'));
         });
 
         document.getElementById('ban-form-modal').addEventListener('submit', (e) => {
@@ -506,14 +664,14 @@
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'ok') {
-                    alert('Пользователь забанен');
+                    showNotification('Пользователь забанен', 'success');
                     closeModal('banModal');
                     location.reload();
                 } else {
-                    alert('Ошибка: ' + data.message);
+                    showNotification('Ошибка: ' + data.message, 'error');
                 }
             })
-            .catch(error => console.error('Ошибка:', error));
+            .catch(error => showNotification('Ошибка бана пользователя', 'error'));
         });
 
         {% if is_muted %}
@@ -527,13 +685,13 @@
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'ok') {
-                    alert('Мут снят');
+                    showNotification('Мут снят', 'success');
                     location.reload();
                 } else {
-                    alert('Ошибка: ' + data.message);
+                    showNotification('Ошибка: ' + data.message, 'error');
                 }
             })
-            .catch(error => console.error('Ошибка:', error));
+            .catch(error => showNotification('Ошибка снятия мута', 'error'));
         });
         {% endif %}
 
@@ -548,13 +706,13 @@
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'ok') {
-                    alert('Бан снят');
+                    showNotification('Бан снят', 'success');
                     location.reload();
                 } else {
-                    alert('Ошибка: ' + data.message);
+                    showNotification('Ошибка: ' + data.message, 'error');
                 }
             })
-            .catch(error => console.error('Ошибка:', error));
+            .catch(error => showNotification('Ошибка снятия бана', 'error'));
         });
         {% endif %}
 
@@ -563,13 +721,11 @@
             const modalImage = document.getElementById('modalImage');
             modalImage.src = src;
             modal.classList.remove('hidden');
-            console.log('Модальное окно открыто');
         }
 
         function closeImageModal() {
             const modal = document.getElementById('imageModal');
             modal.classList.add('hidden');
-            console.log('Модальное окно закрыто');
         }
 
         document.addEventListener('keydown', (e) => {
@@ -591,8 +747,6 @@
                     formData.append('text', inputText);
                     formData.append('file', file, `screenshot-${Date.now()}.png`);
                     formData.append('issue_type', document.getElementById('issue-type-select').value);
-
-                    console.log('Отправка изображения из буфера:', Object.fromEntries(formData));
                     try {
                         const response = await fetch('/send_message', {
                             method: 'POST',
@@ -600,15 +754,12 @@
                         });
                         const data = await response.json();
                         if (data.status === 'ok') {
-                            console.log('Изображение из буфера обмена отправлено');
                             document.getElementById('send-message-form').reset();
                         } else {
-                            console.error('Ошибка:', data.message);
-                            alert('Не удалось отправить изображение: ' + data.message);
+                            showNotification('Не удалось отправить изображение: ' + data.message, 'error');
                         }
                     } catch (error) {
-                        console.error('Ошибка:', error);
-                        alert('Не удалось отправить изображение');
+                        showNotification('Не удалось отправить изображение', 'error');
                     }
                     break;
                 }
@@ -620,7 +771,7 @@
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
             const adminMessagesDiv = document.getElementById('admin-messages');
             adminMessagesDiv.scrollTop = adminMessagesDiv.scrollHeight;
-            console.log('Скролл к последнему сообщению при загрузке');
+            bindMessageActions();
         };
 
         const textarea = document.getElementById('message-input');

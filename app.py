@@ -369,7 +369,6 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
     cursor.execute("SELECT telegram_id, login FROM employees WHERE is_admin = 1")
     support_employees = [{"telegram_id": row["telegram_id"], "login": row["login"]} for row in cursor.fetchall()]
 
-    # Check mute status
     cursor.execute("SELECT end_time FROM mutes WHERE user_id = ?", (telegram_id,))
     mute_data = cursor.fetchone()
     is_muted = False
@@ -380,7 +379,6 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
             is_muted = True
             mute_end_time = end_time
 
-    # Check ban status
     cursor.execute("SELECT end_time FROM bans WHERE user_id = ?", (telegram_id,))
     ban_data = cursor.fetchone()
     is_banned = False
@@ -499,7 +497,11 @@ async def send_message(
             raise HTTPException(status_code=500, detail="Event loop not initialized")
 
         telegram_text = text if text else ""
-        queue_data = {"telegram_id": telegram_id, "text": telegram_text}
+        queue_data = {
+            "telegram_id": telegram_id,
+            "text": telegram_text,
+            "message_id": message_id
+        }
         if file_path:
             queue_data["file_path"] = file_path
             queue_data["file_type"] = file_type
@@ -517,7 +519,8 @@ async def send_message(
             "login": employee["login"],
             "file_path": file_path,
             "file_name": file_name,
-            "file_type": file_type
+            "file_type": file_type,
+            "message_id": message_id
         })
         logging.debug("Уведомление через SocketIO отправлено")
 
@@ -525,6 +528,153 @@ async def send_message(
     except Exception as e:
         logging.error(f"Ошибка при отправке сообщения: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/delete_message")
+async def delete_message(
+    request: Request,
+    message_id: int = Form(...),
+    ticket_id: int = Form(...),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        logging.error(f"Пользователь {employee['telegram_id']} не является администратором")
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    try:
+        logging.debug(f"Удаление сообщения: message_id={message_id}, ticket_id={ticket_id}")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT telegram_id, is_from_bot, telegram_message_id FROM messages WHERE message_id = ? AND ticket_id = ?",
+            (message_id, ticket_id)
+        )
+        message = cursor.fetchone()
+        if not message:
+            conn.close()
+            logging.error(f"Сообщение message_id={message_id} не найдено")
+            raise HTTPException(status_code=404, detail="Message not found")
+        
+        if not message["is_from_bot"]:
+            conn.close()
+            logging.error(f"Сообщение message_id={message_id} не от бота, удаление запрещено")
+            raise HTTPException(status_code=403, detail="Can only delete bot messages")
+
+        if message["telegram_message_id"]:
+            try:
+                await bot.delete_message(
+                    chat_id=message["telegram_id"],
+                    message_id=message["telegram_message_id"]
+                )
+                logging.debug(f"Сообщение telegram_message_id={message['telegram_message_id']} удалено в Telegram")
+            except Exception as e:
+                logging.warning(f"Не удалось удалить сообщение в Telegram: {e}")
+
+        cursor.execute("SELECT file_path FROM attachments WHERE message_id = ?", (message_id,))
+        attachment = cursor.fetchone()
+        if attachment and os.path.exists(attachment["file_path"]):
+            try:
+                os.remove(attachment["file_path"])
+                logging.debug(f"Файл {attachment['file_path']} удалён")
+            except Exception as e:
+                logging.error(f"Ошибка удаления файла {attachment['file_path']}: {e}")
+
+        cursor.execute("DELETE FROM attachments WHERE message_id = ?", (message_id,))
+        cursor.execute("DELETE FROM messages WHERE message_id = ?", (message_id,))
+        if cursor.rowcount == 0:
+            conn.close()
+            logging.error(f"Сообщение message_id={message_id} не найдено при удалении")
+            raise HTTPException(status_code=404, detail="Message not found")
+        
+        conn.commit()
+        conn.close()
+        logging.debug(f"Сообщение message_id={message_id} удалено из базы")
+
+        await sio.emit("message_deleted", {
+            "ticket_id": ticket_id,
+            "message_id": message_id
+        })
+        logging.debug(f"Событие message_deleted отправлено для message_id={message_id}")
+
+        return {"status": "ok"}
+    except Exception as e:
+        logging.error(f"Ошибка при удалении сообщения: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete message: {str(e)}")
+
+@app.post("/edit_message")
+async def edit_message(
+    request: Request,
+    message_id: int = Form(...),
+    ticket_id: int = Form(...),
+    text: str = Form(...),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        logging.error(f"Пользователь {employee['telegram_id']} не является администратором")
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    try:
+        logging.debug(f"Редактирование сообщения: message_id={message_id}, ticket_id={ticket_id}, new_text={text}")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT telegram_id, is_from_bot, telegram_message_id, timestamp FROM messages WHERE message_id = ? AND ticket_id = ?",
+            (message_id, ticket_id)
+        )
+        message = cursor.fetchone()
+        if not message:
+            conn.close()
+            logging.error(f"Сообщение message_id={message_id} не найдено")
+            raise HTTPException(status_code=404, detail="Message not found")
+        
+        if not message["is_from_bot"]:
+            conn.close()
+            logging.error(f"Сообщение message_id={message_id} не от бота, редактирование запрещено")
+            raise HTTPException(status_code=403, detail="Can only edit bot messages")
+
+        cursor.execute(
+            "UPDATE messages SET text = ? WHERE message_id = ?",
+            (text, message_id)
+        )
+        if cursor.rowcount == 0:
+            conn.close()
+            logging.error(f"Сообщение message_id={message_id} не найдено при редактировании")
+            raise HTTPException(status_code=404, detail="Message not found")
+        
+        conn.commit()
+        conn.close()
+        logging.debug(f"Сообщение message_id={message_id} отредактировано в базе")
+
+        if loop is None:
+            logging.error("Цикл событий не инициализирован")
+            raise HTTPException(status_code=500, detail="Event loop not initialized")
+
+        queue_data = {
+            "telegram_id": message["telegram_id"],
+            "text": text,
+            "message_id": message_id,
+            "telegram_message_id": message["telegram_message_id"]
+        }
+        logging.debug(f"Добавляем отредактированное сообщение в очередь: {queue_data}")
+        await message_queue.put(queue_data)
+        logging.debug(f"Отредактированное сообщение добавлено в очередь")
+
+        await sio.emit("message_edited", {
+            "ticket_id": ticket_id,
+            "message_id": message_id,
+            "text": text,
+            "timestamp": message["timestamp"],
+            "telegram_id": message["telegram_id"],
+            "login": employee["login"],
+            "is_from_bot": True
+        })
+        logging.debug(f"Событие message_edited отправлено для message_id={message_id}")
+
+        return {"status": "ok"}
+    except Exception as e:
+        logging.error(f"Ошибка при редактировании сообщения: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to edit message: {str(e)}")
 
 @app.post("/send_admin_message")
 async def send_admin_message(
@@ -592,7 +742,8 @@ async def close_ticket(request: Request, ticket_id: int = Form(...), employee: d
 
         queue_data = {
             "telegram_id": telegram_id,
-            "text": "Ваше обращение закрыто"
+            "text": "Ваше обращение закрыто",
+            "message_id": None  # Ensure no telegram_message_id for new messages
         }
         logging.debug(f"Добавляем уведомление о закрытии в очередь: {queue_data}")
         await message_queue.put(queue_data)

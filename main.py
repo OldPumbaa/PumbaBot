@@ -69,6 +69,7 @@ def init_db():
             text TEXT,
             is_from_bot INTEGER,
             timestamp TEXT,
+            telegram_message_id INTEGER,
             FOREIGN KEY (ticket_id) REFERENCES tickets (ticket_id),
             FOREIGN KEY (telegram_id) REFERENCES employees (telegram_id)
         )
@@ -126,6 +127,11 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES employees (telegram_id)
         )
     """)
+    cursor.execute("PRAGMA table_info(messages)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'telegram_message_id' not in columns:
+        logging.debug("Добавление столбца telegram_message_id в таблицу messages")
+        cursor.execute("ALTER TABLE messages ADD COLUMN telegram_message_id INTEGER")
     try:
         admin_telegram_id = int(ADMIN_TELEGRAM_ID)
         logging.debug(f"Проверка ADMIN_TELEGRAM_ID: {admin_telegram_id}")
@@ -197,7 +203,7 @@ def is_banned(user_id: int) -> bool:
     conn.close()
     if row:
         if row[0] is None:
-            return True  # Перманентный бан
+            return True
         end_time = datetime.fromisoformat(row[0])
         if datetime.now() < end_time:
             return True
@@ -315,8 +321,8 @@ async def handle_file(message: Message, file_type: str):
 
     text = message.caption if message.caption else f"[{file_type}] {file_name}"
     cursor.execute(
-        "INSERT INTO messages (ticket_id, telegram_id, text, is_from_bot, timestamp) VALUES (?, ?, ?, ?, ?)",
-        (ticket_id, telegram_id, text, 0, timestamp)
+        "INSERT INTO messages (ticket_id, telegram_id, text, is_from_bot, timestamp, telegram_message_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (ticket_id, telegram_id, text, 0, timestamp, message.message_id)
     )
     message_id = cursor.lastrowid
 
@@ -337,7 +343,8 @@ async def handle_file(message: Message, file_type: str):
         "login": login,
         "file_path": file_path,
         "file_name": file_name,
-        "file_type": file_type
+        "file_type": file_type,
+        "message_id": message_id
     })
 
     if is_new_ticket:
@@ -409,9 +416,10 @@ async def handle_text_message(message: Message):
     )
     if not cursor.fetchone():
         cursor.execute(
-            "INSERT INTO messages (ticket_id, telegram_id, text, is_from_bot, timestamp) VALUES (?, ?, ?, ?, ?)",
-            (ticket_id, telegram_id, message.text, 0, timestamp)
+            "INSERT INTO messages (ticket_id, telegram_id, text, is_from_bot, timestamp, telegram_message_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (ticket_id, telegram_id, message.text, 0, timestamp, message.message_id)
         )
+        message_id = cursor.lastrowid
         conn.commit()
 
         logging.debug(f"Отправка события new_message для ticket_id={ticket_id}, text={message.text}")
@@ -421,7 +429,8 @@ async def handle_text_message(message: Message):
             "text": message.text,
             "is_from_bot": False,
             "timestamp": timestamp,
-            "login": login
+            "login": login,
+            "message_id": message_id
         })
 
     conn.close()
@@ -454,35 +463,76 @@ async def process_message_queue():
             text = data["text"]
             file_path = data.get("file_path")
             file_type = data.get("file_type")
-            logging.debug(f"Получено сообщение из очереди: telegram_id={telegram_id}, text={text}, file={file_path}")
+            message_id = data.get("message_id")
+            telegram_message_id = data.get("telegram_message_id")  # New: for editing
+            logging.debug(f"Получено сообщение из очереди: telegram_id={telegram_id}, text={text}, file={file_path}, message_id={message_id}, telegram_message_id={telegram_message_id}")
+            
+            telegram_message = None
             try:
-                if file_path and file_type:
-                    if not os.path.exists(file_path):
-                        logging.error(f"Файл не найден: {file_path}")
-                        raise FileNotFoundError(f"File not found: {file_path}")
-                    logging.debug(f"Отправка файла: {file_path}, тип: {file_type}")
-                    file = FSInputFile(path=file_path)
-                    if file_type == 'image':
-                        await bot.send_photo(
+                if telegram_message_id:  # Editing an existing message
+                    logging.debug(f"Редактирование сообщения telegram_message_id={telegram_message_id}")
+                    # Check if there's an attachment
+                    conn = sqlite3.connect("support.db", timeout=10)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT file_type FROM attachments WHERE message_id = ?", (message_id,))
+                    attachment = cursor.fetchone()
+                    conn.close()
+                    
+                    if attachment and attachment["file_type"] in ["image", "document"]:
+                        # Edit caption for media messages
+                        await bot.edit_message_caption(
                             chat_id=telegram_id,
-                            photo=file,
+                            message_id=telegram_message_id,
                             caption=text
                         )
                     else:
-                        await bot.send_document(
+                        # Edit text for text messages
+                        await bot.edit_message_text(
                             chat_id=telegram_id,
-                            document=file,
-                            caption=text
+                            message_id=telegram_message_id,
+                            text=text
                         )
-                else:
-                    await bot.send_message(chat_id=telegram_id, text=text)
-                logging.debug(f"Сообщение отправлено пользователю {telegram_id}: {text}")
+                    logging.debug(f"Сообщение telegram_message_id={telegram_message_id} отредактировано в Telegram")
+                else:  # Sending a new message
+                    if file_path and file_type:
+                        if not os.path.exists(file_path):
+                            logging.error(f"Файл не найден: {file_path}")
+                            raise FileNotFoundError(f"File not found: {file_path}")
+                        logging.debug(f"Отправка файла: {file_path}, тип: {file_type}")
+                        file = FSInputFile(path=file_path)
+                        if file_type == 'image':
+                            telegram_message = await bot.send_photo(
+                                chat_id=telegram_id,
+                                photo=file,
+                                caption=text
+                            )
+                        else:
+                            telegram_message = await bot.send_document(
+                                chat_id=telegram_id,
+                                document=file,
+                                caption=text
+                            )
+                    else:
+                        telegram_message = await bot.send_message(chat_id=telegram_id, text=text)
+                
+                    if telegram_message and message_id:
+                        conn = sqlite3.connect("support.db", timeout=10)
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "UPDATE messages SET telegram_message_id = ? WHERE message_id = ?",
+                            (telegram_message.message_id, message_id)
+                        )
+                        conn.commit()
+                        conn.close()
+                        logging.debug(f"Сохранён telegram_message_id={telegram_message.message_id} для message_id={message_id}")
+                
+                logging.debug(f"Сообщение отправлено/отредактировано пользователю {telegram_id}: {text}")
             except Exception as e:
-                logging.error(f"Ошибка при отправке сообщения в Telegram: {e}")
+                logging.error(f"Ошибка при отправке/редактировании сообщения в Telegram: {e}")
                 with open("error_log.txt", "a") as f:
-                    f.write(f"[{datetime.now()}] Ошибка отправки {telegram_id}: {e}\n")
+                    f.write(f"[{datetime.now()}] Ошибка обработки {telegram_id}: {e}\n")
             finally:
-                message_queue.task_done
+                message_queue.task_done()
         except Exception as e:
             logging.error(f"Ошибка в обработке очереди: {e}")
             with open("error_log.txt", "a") as f:
@@ -491,7 +541,7 @@ async def process_message_queue():
 
 async def cleanup_expired():
     while True:
-        await asyncio.sleep(3600)  # Каждые 60 минут
+        await asyncio.sleep(3600)
         conn = sqlite3.connect("support.db", timeout=10)
         cursor = conn.cursor()
         now = datetime.now().isoformat()
