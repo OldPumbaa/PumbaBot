@@ -2,8 +2,8 @@ import asyncio
 import uvicorn
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, ContentType, FSInputFile
-from app import app, sio, message_queue, set_event_loop
+from aiogram.types import Message, ContentType, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from app import app, sio, message_queue, set_event_loop, send_notification_to_topic
 from dotenv import load_dotenv
 import os
 import logging
@@ -25,13 +25,11 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
 NOTIFICATION_CHAT_ID = os.getenv("NOTIFICATION_CHAT_ID")
 NOTIFICATION_TOPIC_ID = os.getenv("NOTIFICATION_TOPIC_ID")
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
 
 if not BOT_TOKEN or not ADMIN_TELEGRAM_ID:
     logging.error("BOT_TOKEN или ADMIN_TELEGRAM_ID не указаны в .env")
     raise ValueError("BOT_TOKEN and ADMIN_TELEGRAM_ID must be set in .env file")
-
-if not NOTIFICATION_CHAT_ID or not NOTIFICATION_TOPIC_ID:
-    logging.warning("NOTIFICATION_CHAT_ID или NOTIFICATION_TOPIC_ID не указаны в .env, уведомления не будут отправляться")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -125,6 +123,14 @@ def init_db():
             user_id INTEGER PRIMARY KEY,
             end_time TEXT,
             FOREIGN KEY (user_id) REFERENCES employees (telegram_id)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS quick_replies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            text TEXT NOT NULL,
+            color TEXT NOT NULL
         )
     """)
     cursor.execute("PRAGMA table_info(messages)")
@@ -225,18 +231,6 @@ def remove_ban(user_id: int):
     conn.commit()
     conn.close()
 
-async def send_notification_to_topic(ticket_id: int, login: str, message: str):
-    if NOTIFICATION_CHAT_ID and NOTIFICATION_TOPIC_ID:
-        try:
-            await bot.send_message(
-                chat_id=NOTIFICATION_CHAT_ID,
-                message_thread_id=int(NOTIFICATION_TOPIC_ID),
-                text=f"Тикет #{ticket_id} ({login}): {message}"
-            )
-            logging.debug(f"Уведомление отправлено в чат {NOTIFICATION_CHAT_ID}, топик {NOTIFICATION_TOPIC_ID}: {message}")
-        except Exception as e:
-            logging.error(f"Ошибка отправки уведомления в чат {NOTIFICATION_CHAT_ID}, топик {NOTIFICATION_TOPIC_ID}: {e}")
-
 @dp.message(Command(commands=["start"]))
 async def start_command(message: Message):
     telegram_id = message.from_user.id
@@ -249,7 +243,7 @@ async def start_command(message: Message):
     if employee:
         login, is_admin = employee
         if is_admin:
-            await message.reply(f"Добро пожаловать, {login}! Вы администратор (техподдержка). Можете создавать тикеты и работать в веб-интерфейсе: http://localhost:8080")
+            await message.reply(f"Добро пожаловать, {login}! Вы администратор (техподдержка). Можете создавать тикеты и работать в веб-интерфейсе: {BASE_URL}")
         else:
             await message.reply(f"Добро пожаловать, {login}! Вы можете создавать тикеты, отправив сообщение или файл.")
     else:
@@ -452,6 +446,74 @@ async def handle_text_message(message: Message):
         if not is_working_hours():
             reply_text += "\n\nОбратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени."
         await message.reply(reply_text)
+
+@dp.callback_query(lambda c: c.data.startswith("minichat_"))
+async def handle_minichat(callback: CallbackQuery):
+    ticket_id = int(callback.data.split("_")[1])
+    telegram_id = callback.from_user.id
+    
+    conn = sqlite3.connect("support.db", timeout=10)
+    cursor = conn.cursor()
+    
+    # Проверяем, что сотрудник имеет доступ
+    cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
+    employee = cursor.fetchone()
+    if not employee:
+        await callback.message.answer("Вы не авторизованы.")
+        conn.close()
+        await callback.answer()
+        return
+    
+    # Получаем все сообщения тикета
+    cursor.execute(
+        """
+        SELECT m.message_id, m.text, m.timestamp, e.login, a.file_path, a.file_name, a.file_type
+        FROM messages m
+        JOIN employees e ON m.telegram_id = e.telegram_id
+        LEFT JOIN attachments a ON m.message_id = a.message_id
+        WHERE m.ticket_id = ?
+        ORDER BY m.timestamp
+        """,
+        (ticket_id,)
+    )
+    messages = cursor.fetchall()
+    conn.close()
+
+    if not messages:
+        await callback.message.answer(f"Тикет #{ticket_id}: Сообщений пока нет.")
+        await callback.answer()
+        return
+
+    # Отправляем историю сообщений
+    astana_tz = pytz.timezone('Asia/Almaty')
+    for msg in messages:
+        timestamp = datetime.fromisoformat(msg["timestamp"]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S')
+        text = f"[{timestamp}] {msg['login']}: {msg['text']}"
+        if msg["file_name"]:
+            text += f" [Файл: {msg['file_name']}]"
+        
+        if msg["file_path"] and msg["file_type"] == "image":
+            try:
+                file = FSInputFile(path=msg["file_path"])
+                await bot.send_photo(
+                    chat_id=telegram_id,
+                    photo=file,
+                    caption=text
+                )
+            except Exception as e:
+                logging.error(f"Ошибка отправки изображения {msg['file_path']}: {e}")
+                await bot.send_message(
+                    chat_id=telegram_id,
+                    text=f"{text}\n(Не удалось загрузить изображение)"
+                )
+        else:
+            await bot.send_message(
+                chat_id=telegram_id,
+                text=text
+            )
+    
+    await callback.message.answer(f"История тикета #{ticket_id} отправлена.")
+    await callback.answer()
 
 async def process_message_queue():
     logging.debug("Запущена обработка очереди сообщений")

@@ -13,10 +13,11 @@ import os
 import pytz
 import time
 import re
+import secrets
 import hashlib
 import hmac
-import secrets
 from aiogram import Bot
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -25,6 +26,7 @@ logging.basicConfig(
 )
 
 load_dotenv()
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
 
 app = FastAPI()
 
@@ -214,6 +216,87 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(AuthMiddleware)
 
+async def send_notification_to_topic(ticket_id: int, login: str, message: str):
+    if not NOTIFICATION_CHAT_ID or not NOTIFICATION_TOPIC_ID:
+        logging.warning("NOTIFICATION_CHAT_ID или NOTIFICATION_TOPIC_ID не заданы, уведомление не отправлено")
+        return
+    try:
+        history_text = f"Тикет #{ticket_id} ({login}): {message}"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Открыть тикет", url=f"{BASE_URL}/ticket/{ticket_id}")
+            ]
+        ])
+        await bot.send_message(
+            chat_id=NOTIFICATION_CHAT_ID,
+            message_thread_id=int(NOTIFICATION_TOPIC_ID),
+            text=history_text,
+            reply_markup=keyboard
+        )
+        logging.info(f"Уведомление отправлено в чат {NOTIFICATION_CHAT_ID}, топик {NOTIFICATION_TOPIC_ID}: Тикет #{ticket_id}")
+    except Exception as e:
+        logging.error(f"Ошибка отправки уведомления: {str(e)}")
+        raise
+
+@app.get("/quickview/{ticket_id}", response_class=HTMLResponse)
+async def quickview(
+    request: Request,
+    ticket_id: int,
+    employee: dict = Depends(get_current_user)
+):
+    logging.debug(f"Запрос к QuickView тикета #{ticket_id}")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT telegram_id FROM tickets WHERE ticket_id = ?", (ticket_id,))
+    ticket_data = cursor.fetchone()
+    if not ticket_data:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    telegram_id = ticket_data["telegram_id"]
+
+    cursor.execute(
+        """
+        SELECT m.message_id, m.ticket_id, m.telegram_id, m.text, m.is_from_bot, m.timestamp, e.login,
+               a.file_path, a.file_name, a.file_type
+        FROM messages m
+        JOIN employees e ON m.telegram_id = e.telegram_id
+        LEFT JOIN attachments a ON m.message_id = a.message_id
+        WHERE m.ticket_id = ?
+        ORDER BY m.timestamp
+        """,
+        (ticket_id,)
+    )
+    astana_tz = pytz.timezone('Asia/Almaty')
+    messages = [
+        {
+            "message_id": row[0],
+            "ticket_id": row[1],
+            "telegram_id": row[2],
+            "text": row[3],
+            "is_from_bot": bool(row[4]),
+            "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
+            "login": row[6],
+            "file_path": row[7],
+            "file_name": row[8],
+            "file_type": row[9]
+        }
+        for row in cursor.fetchall()
+    ]
+    cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
+    employee_data = cursor.fetchone()
+    login = employee_data[0] if employee_data else "Unknown"
+    conn.close()
+    return templates.TemplateResponse(
+        "quickview.html",
+        {
+            "request": request,
+            "ticket_id": ticket_id,
+            "messages": messages,
+            "login": login,
+            "employee": employee
+        }
+    )
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     logging.debug("Запрос к странице логина")
@@ -278,7 +361,7 @@ async def index(request: Request, employee: dict = Depends(get_current_user)):
                     "id": row["ticket_id"],
                     "login": row["login"],
                     "last_message": row["last_message"],
-                    "last_message_timestamp": datetime.fromisoformat(row["last_message_timestamp"]).astimezone(astana_tz).isoformat() if row["last_message_timestamp"] else None,
+                    "last_message_timestamp": datetime.fromisoformat(row["last_message_timestamp"]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S') if row["last_message_timestamp"] else None,
                     "file_path": row["file_path"],
                     "file_name": row["file_name"],
                     "file_type": row["file_type"],
@@ -334,7 +417,7 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
             "telegram_id": row[2],
             "text": row[3],
             "is_from_bot": bool(row[4]),
-            "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).isoformat(),
+            "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
             "login": row[6],
             "file_path": row[7],
             "file_name": row[8],
@@ -358,7 +441,7 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
             "ticket_id": row[1],
             "telegram_id": row[2],
             "text": row[3],
-            "timestamp": datetime.fromisoformat(row[4]).astimezone(astana_tz).isoformat(),
+            "timestamp": datetime.fromisoformat(row[4]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
             "login": row[5]
         }
         for row in cursor.fetchall()
@@ -389,6 +472,17 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
             is_banned = True
             ban_end_time = end_time
 
+    cursor.execute("SELECT id, title, text, color FROM quick_replies ORDER BY title")
+    quick_replies = [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "text": row["text"],
+            "color": row["color"]
+        }
+        for row in cursor.fetchall()
+    ]
+
     conn.close()
     return templates.TemplateResponse(
         "ticket.html",
@@ -406,9 +500,77 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
             "is_muted": is_muted,
             "mute_end_time": mute_end_time,
             "is_banned": is_banned,
-            "ban_end_time": ban_end_time
+            "ban_end_time": ban_end_time,
+            "quick_replies": quick_replies
         }
     )
+
+@app.post("/add_quick_reply")
+async def add_quick_reply(
+    request: Request,
+    title: str = Form(...),
+    text: str = Form(...),
+    color: str = Form(...),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    if color not in ["blue", "green", "red", "purple", "gray"]:
+        raise HTTPException(status_code=400, detail="Invalid color")
+    
+    if len(title) > 50 or len(text) > 1000:
+        raise HTTPException(status_code=400, detail="Title or text too long")
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO quick_replies (title, text, color) VALUES (?, ?, ?)",
+            (title, text, color)
+        )
+        quick_reply_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        quick_reply = {
+            "id": quick_reply_id,
+            "title": title,
+            "text": text,
+            "color": color
+        }
+        await sio.emit("quick_reply_added", quick_reply)
+        logging.debug(f"Добавлен быстрый ответ: {quick_reply}")
+        return {"status": "ok", "quick_reply": quick_reply}
+    except Exception as e:
+        logging.error(f"Ошибка при добавлении быстрого ответа: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/delete_quick_reply")
+async def delete_quick_reply(
+    request: Request,
+    quick_reply_id: int = Form(...),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM quick_replies WHERE id = ?", (quick_reply_id,))
+        if cursor.rowcount == 0:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Quick reply not found")
+        conn.commit()
+        conn.close()
+        
+        await sio.emit("quick_reply_deleted", {"id": quick_reply_id})
+        logging.debug(f"Удалён быстрый ответ: id={quick_reply_id}")
+        return {"status": "ok"}
+    except Exception as e:
+        logging.error(f"Ошибка при удалении быстрого ответа: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/send_message")
 async def send_message(
@@ -743,7 +905,7 @@ async def close_ticket(request: Request, ticket_id: int = Form(...), employee: d
         queue_data = {
             "telegram_id": telegram_id,
             "text": "Ваше обращение закрыто",
-            "message_id": None  # Ensure no telegram_message_id for new messages
+            "message_id": None
         }
         logging.debug(f"Добавляем уведомление о закрытии в очередь: {queue_data}")
         await message_queue.put(queue_data)
@@ -757,57 +919,92 @@ async def close_ticket(request: Request, ticket_id: int = Form(...), employee: d
         logging.error(f"Ошибка при закрытии тикета: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def send_notification_to_topic(ticket_id: int, login: str, message: str):
-    if NOTIFICATION_CHAT_ID and NOTIFICATION_TOPIC_ID:
-        try:
-            await bot.send_message(
-                chat_id=NOTIFICATION_CHAT_ID,
-                message_thread_id=int(NOTIFICATION_TOPIC_ID),
-                text=f"Тикет #{ticket_id} ({login}): {message}"
-            )
-            logging.debug(f"Уведомление отправлено в чат {NOTIFICATION_CHAT_ID}, топик {NOTIFICATION_TOPIC_ID}: {message}")
-        except Exception as e:
-            logging.error(f"Ошибка отправки уведомления в чат {NOTIFICATION_CHAT_ID}, топик {NOTIFICATION_TOPIC_ID}: {e}")
-
 @app.post("/assign_ticket")
 async def assign_ticket_endpoint(
     request: Request, 
     ticket_id: int = Form(...), 
-    assigned_to: int = Form(...), 
+    assigned_to: str = Form(None),
     employee: dict = Depends(get_current_user)
 ):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (assigned_to,))
-        employee_data = cursor.fetchone()
-        if not employee_data:
-            conn.close()
-            raise HTTPException(status_code=400, detail="Invalid assigned_to telegram_id")
-        assigned_login = employee_data[0]
 
-        cursor.execute("UPDATE tickets SET assigned_to = ? WHERE ticket_id = ?", (assigned_to, ticket_id))
+        assigned_login = None
+        assigned_to_id = None
+
+        if assigned_to:
+            try:
+                assigned_to_id = int(assigned_to)
+                cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (assigned_to_id,))
+                employee_data = cursor.fetchone()
+                if not employee_data:
+                    conn.close()
+                    raise HTTPException(status_code=400, detail="Invalid assigned_to telegram_id")
+                assigned_login = employee_data[0]
+            except ValueError:
+                conn.close()
+                raise HTTPException(status_code=400, detail="Invalid assigned_to telegram_id format")
+
+        cursor.execute("UPDATE tickets SET assigned_to = ? WHERE ticket_id = ?", (assigned_to_id, ticket_id))
         if cursor.rowcount == 0:
+            cursor.execute("SELECT telegram_id FROM tickets WHERE ticket_id = ?", (ticket_id,))
+            ticket_data = cursor.fetchone()
             conn.close()
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            if not ticket_data:
+                raise HTTPException(status_code=404, detail="Ticket not found")
+            else:
+                raise HTTPException(status_code=500, detail="Failed to assign ticket")
+
+        cursor.execute(
+            """
+            SELECT m.text, m.timestamp, e.login, a.file_name
+            FROM messages m
+            JOIN employees e ON m.telegram_id = e.telegram_id
+            LEFT JOIN attachments a ON m.message_id = a.message_id
+            WHERE m.ticket_id = ?
+            ORDER BY m.timestamp DESC
+            LIMIT 5
+            """,
+            (ticket_id,)
+        )
+        messages = cursor.fetchall()
         conn.commit()
         conn.close()
 
+        history_text = f"Вам назначен тикет #{ticket_id}.\n\nПоследние сообщения:\n"
+        if messages:
+            astana_tz = pytz.timezone('Asia/Almaty')
+            for msg in reversed(messages):
+                timestamp = datetime.fromisoformat(msg["timestamp"]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S')
+                file_info = f" [Файл: {msg['file_name']}]" if msg['file_name'] else ""
+                history_text += f"[{timestamp}] {msg['login']}: {msg['text']}{file_info}\n"
+        else:
+            history_text += "Сообщений пока нет.\n"
+
         await sio.emit("ticket_assigned", {
             "ticket_id": ticket_id,
-            "assigned_to": assigned_to,
+            "assigned_to": assigned_to_id,
             "assigned_login": assigned_login
         })
 
-        await send_notification_to_topic(ticket_id, assigned_login, f"Тикет переназначен на {assigned_login}")
-        try:
-            await bot.send_message(
-                chat_id=assigned_to,
-                text=f"Вам назначен тикет #{ticket_id}. Проверьте: http://localhost:8080/ticket/{ticket_id}"
-            )
-            logging.debug(f"Персональное уведомление отправлено сотруднику {assigned_to} о назначении тикета #{ticket_id}")
-        except Exception as e:
-            logging.error(f"Ошибка отправки персонального уведомления сотруднику {assigned_to}: {e}")
+        await send_notification_to_topic(ticket_id, assigned_login or "Никто", f"Тикет переназначен на {assigned_login or 'никого'}")
+        if assigned_to_id:
+            try:
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="Открыть тикет", url=f"{BASE_URL}/ticket/{ticket_id}"),
+                        InlineKeyboardButton(text="Мини-чат", callback_data=f"minichat_{ticket_id}")
+                    ]
+                ])
+                await bot.send_message(
+                    chat_id=assigned_to_id,
+                    text=history_text,
+                    reply_markup=keyboard
+                )
+                logging.debug(f"Персональное уведомление отправлено сотруднику {assigned_to_id} о назначении тикета #{ticket_id}")
+            except Exception as e:
+                logging.error(f"Ошибка отправки персонального уведомления сотруднику {assigned_to_id}: {e}")
 
         return {"status": "ok", "assigned_to": assigned_login}
     except Exception as e:
@@ -911,7 +1108,7 @@ async def fetch_telegram_history(
                 "telegram_id": row[2],
                 "text": f"[Тикет #{row[1]}] {row[3]}",
                 "is_from_bot": bool(row[4]),
-                "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).isoformat(),
+                "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
                 "login": row[6],
                 "file_path": row[7],
                 "file_name": row[8],
@@ -1078,3 +1275,11 @@ async def new_ticket(sid, data):
     logging.debug(f"Получено событие new_ticket: {data}")
     await sio.emit("update_tickets", data)
     logging.debug("Событие update_tickets отправлено")
+
+@sio.event
+async def connect(sid, environ):
+    logging.debug(f"Клиент подключился: {sid}")
+
+@sio.event
+async def disconnect(sid):
+    logging.debug(f"Клиент отключился: {sid}")
