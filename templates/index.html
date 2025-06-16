@@ -9,10 +9,19 @@
     <div class="flex justify-between items-center mb-4">
         <h1 class="text-2xl">Тикеты техподдержки</h1>
         <div>
-            <span class="mr-4">Вы вошли как: {{ employee.login }}</span>
+            <span class="mr-4">Вы вошли как: {{ employee.login }} <span id="employee-ratings" class="text-sm text-gray-600">Загрузка рейтингов...</span></span>
             <a href="/admin/employees" class="bg-green-500 text-white p-2 rounded mr-2">Управление сотрудниками</a>
             <a href="/logout" class="bg-red-500 text-white p-2 rounded">Выйти</a>
         </div>
+    </div>
+    <div class="mb-4">
+        <form action="/search" method="get" class="flex items-center">
+            <input type="text" name="query" placeholder="Поиск по тикетам..." value="{{ request.query_params.get('query', '') }}" class="border p-2 rounded-l-md w-full max-w-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <button type="submit" class="bg-blue-500 text-white p-2 rounded-r-md hover:bg-blue-600">Найти</button>
+            {% if request.query_params.get('query') %}
+                <a href="/" class="ml-2 text-blue-500 underline hover:text-blue-700">Сбросить поиск</a>
+            {% endif %}
+        </form>
     </div>
     <button id="cleanupBtn" class="bg-red-500 text-white p-2 rounded mb-4">Очистить старые тикеты</button>
     <div id="ticketsList">
@@ -165,9 +174,38 @@
             }
         });
 
+        socket.on("employee_rated", (data) => {
+            console.log('Employee rated:', data);
+            if (data.employee_id === {{ employee.telegram_id }}) {
+                const ratingsSpan = document.getElementById('employee-ratings');
+                if (ratingsSpan) {
+                    ratingsSpan.innerHTML = `👍 ${data.thumbs_up} | 👎 ${data.thumbs_down}`;
+                }
+            }
+        });
+
         document.getElementById("cleanupBtn").addEventListener("click", () => {
             fetch("/cleanup", { method: 'POST' }).then(() => location.reload());
         });
+
+        async function fetchEmployeeRatings() {
+            const ratingsSpan = document.getElementById('employee-ratings');
+            if (!ratingsSpan) return;
+            try {
+                const response = await fetch(`/employee/{{ employee.telegram_id }}/ratings`);
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    ratingsSpan.innerHTML = `👍 ${data.thumbs_up} | 👎 ${data.thumbs_down}`;
+                } else {
+                    ratingsSpan.innerHTML = 'Нет рейтингов';
+                }
+            } catch (error) {
+                console.error('Error fetching employee ratings:', error);
+                ratingsSpan.innerHTML = 'Ошибка загрузки рейтингов';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', fetchEmployeeRatings);
     </script>
 <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'939f0f2dee44bd4b',t:'MTc0NjI2Nzk3Ny4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>
 </body>

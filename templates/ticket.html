@@ -908,6 +908,40 @@
             }
         });
 
+        document.addEventListener('DOMContentLoaded', function () {
+            const closeTicketButton = document.querySelector('button[data-action="close-ticket"]');
+            if (closeTicketButton) {
+                closeTicketButton.addEventListener('click', async function () {
+                    const ticketId = this.dataset.ticketId;
+                    const errorDiv = document.createElement('div');
+                    errorDiv.style.color = 'red';
+                    errorDiv.style.display = 'none';
+                    this.parentElement.appendChild(errorDiv);
+
+                    try {
+                        const response = await fetch('/close_ticket', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                            body: `ticket_id=${ticketId}`
+                        });
+                        const data = await response.json();
+                        if (data.status === 'ok') {
+                            window.location.href = '/'; // Redirect to homepage
+                        } else {
+                            errorDiv.textContent = 'Ошибка при закрытии тикета';
+                            errorDiv.style.display = 'block';
+                            setTimeout(() => { errorDiv.style.display = 'none'; }, 3000);
+                        }
+                    } catch (error) {
+                        errorDiv.textContent = 'Ошибка при закрытии тикета';
+                        errorDiv.style.display = 'block';
+                        setTimeout(() => { errorDiv.style.display = 'none'; }, 3000);
+                        console.error('Error closing ticket:', error);
+                    }
+                });
+            }
+        });
+
         window.onload = () => {
             const messagesDiv = document.getElementById('messages');
             messagesDiv.scrollTop = messagesDiv.scrollHeight;

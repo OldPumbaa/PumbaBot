@@ -133,6 +133,30 @@ def init_db():
             color TEXT NOT NULL
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ticket_ratings (
+            rating_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id INTEGER,
+            telegram_id INTEGER,
+            rating TEXT CHECK(rating IN ('up', 'down')),
+            timestamp TEXT,
+            FOREIGN KEY (ticket_id) REFERENCES tickets (ticket_id),
+            FOREIGN KEY (telegram_id) REFERENCES employees (telegram_id),
+            UNIQUE (ticket_id, telegram_id)
+        )
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS employee_ratings (
+        rating_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticket_id INTEGER,
+        employee_id INTEGER,
+        rating TEXT CHECK(rating IN ('up', 'down')),
+        timestamp TEXT,
+        FOREIGN KEY (ticket_id) REFERENCES tickets (ticket_id),
+        FOREIGN KEY (employee_id) REFERENCES employees (telegram_id),
+        UNIQUE (ticket_id, employee_id)
+    )
+""")
     cursor.execute("PRAGMA table_info(messages)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'telegram_message_id' not in columns:
@@ -360,6 +384,22 @@ async def handle_file(message: Message, file_type: str):
             reply_text += "\n\nОбратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени."
         await message.reply(reply_text)
 
+@dp.message(F.voice)
+async def handle_voice(message: Message):
+    telegram_id = message.from_user.id
+    logging.debug(f"Получено голосовое сообщение от telegram_id={telegram_id}")
+
+    if is_banned(telegram_id):
+        logging.debug(f"Пользователь {telegram_id} забанен, игнорируем голосовое сообщение")
+        return
+    if is_muted(telegram_id):
+        logging.debug(f"Пользователь {telegram_id} замучен, отправляем уведомление")
+        await message.reply("Вам временно запрещено писать в бота!")
+        return
+
+    await message.reply("Извините, мы не обрабатываем голосовые сообщения. Пожалуйста, отправьте ваш запрос в текстовом виде.")
+    logging.debug(f"Отправлен ответ на голосовое сообщение для telegram_id={telegram_id}")
+
 @dp.message(F.text)
 async def handle_text_message(message: Message):
     telegram_id = message.from_user.id
@@ -455,7 +495,6 @@ async def handle_minichat(callback: CallbackQuery):
     conn = sqlite3.connect("support.db", timeout=10)
     cursor = conn.cursor()
     
-    # Проверяем, что сотрудник имеет доступ
     cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
     employee = cursor.fetchone()
     if not employee:
@@ -464,7 +503,6 @@ async def handle_minichat(callback: CallbackQuery):
         await callback.answer()
         return
     
-    # Получаем все сообщения тикета
     cursor.execute(
         """
         SELECT m.message_id, m.text, m.timestamp, e.login, a.file_path, a.file_name, a.file_type
@@ -484,7 +522,6 @@ async def handle_minichat(callback: CallbackQuery):
         await callback.answer()
         return
 
-    # Отправляем историю сообщений
     astana_tz = pytz.timezone('Asia/Almaty')
     for msg in messages:
         timestamp = datetime.fromisoformat(msg["timestamp"]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S')
@@ -515,6 +552,82 @@ async def handle_minichat(callback: CallbackQuery):
     await callback.message.answer(f"История тикета #{ticket_id} отправлена.")
     await callback.answer()
 
+@dp.callback_query(lambda c: c.data.startswith("rate_"))
+async def handle_rating(callback: CallbackQuery):
+    data = callback.data.split("_")
+    ticket_id = int(data[1])
+    rating = data[2]  # 'up' or 'down'
+    telegram_id = callback.from_user.id
+
+    logging.debug(f"Processing rating for ticket_id={ticket_id}, rating={rating}, telegram_id={telegram_id}")
+
+    conn = sqlite3.connect("support.db", timeout=10)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT telegram_id, status, assigned_to FROM tickets WHERE ticket_id = ?", (ticket_id,))
+    ticket = cursor.fetchone()
+    if not ticket or ticket["status"] != "closed" or ticket["telegram_id"] != telegram_id:
+        conn.close()
+        await callback.message.answer("Cannot rate this ticket.")
+        await callback.answer()
+        logging.warning(f"Cannot rate ticket #{ticket_id}: status={ticket['status'] if ticket else 'not found'}, telegram_id={telegram_id}")
+        return
+
+    assigned_to = ticket["assigned_to"]
+    if not assigned_to:
+        conn.close()
+        await callback.message.answer("No support employee assigned to rate.")
+        await callback.answer()
+        logging.warning(f"No assigned employee for ticket #{ticket_id}")
+        return
+
+    astana_tz = pytz.timezone('Asia/Almaty')
+    timestamp = datetime.now(astana_tz).isoformat()
+    
+    try:
+        cursor.execute(
+            "INSERT OR REPLACE INTO employee_ratings (ticket_id, employee_id, rating, timestamp) VALUES (?, ?, ?, ?)",
+            (ticket_id, assigned_to, rating, timestamp)
+        )
+        conn.commit()
+        logging.debug(f"Rating {rating} saved for ticket #{ticket_id}, employee_id={assigned_to}")
+
+        # Emit event to update employee ratings in web app
+        cursor.execute(
+            """
+            SELECT 
+                (SELECT COUNT(*) FROM employee_ratings WHERE employee_id = ? AND rating = 'up') AS thumbs_up,
+                (SELECT COUNT(*) FROM employee_ratings WHERE employee_id = ? AND rating = 'down') AS thumbs_down
+            """,
+            (assigned_to, assigned_to)
+        )
+        ratings = cursor.fetchone()
+        await sio.emit("employee_rated", {
+            "employee_id": assigned_to,
+            "thumbs_up": ratings["thumbs_up"],
+            "thumbs_down": ratings["thumbs_down"]
+        })
+        logging.debug(f"Emitted employee_rated event for employee_id={assigned_to}, thumbs_up={ratings['thumbs_up']}, thumbs_down={ratings['thumbs_down']}")
+        
+        try:
+            await callback.message.edit_text(
+                "Обращение закрыто! Спасибо за вашу обратную связь!",
+                reply_markup=None
+            )
+            logging.debug(f"Message for ticket_id={ticket_id} edited, keyboard removed")
+        except Exception as e:
+            logging.error(f"Error editing message for ticket_id={ticket_id}: {e}")
+            await callback.message.answer("Rating saved, but failed to update message.")
+        
+        await callback.answer("Rating submitted!")
+    except Exception as e:
+        logging.error(f"Error saving rating for ticket_id={ticket_id}: {e}")
+        await callback.message.answer("Error saving rating.")
+        await callback.answer("Error!")
+    finally:
+        conn.close()
+
 async def process_message_queue():
     logging.debug("Запущена обработка очереди сообщений")
     while True:
@@ -526,14 +639,14 @@ async def process_message_queue():
             file_path = data.get("file_path")
             file_type = data.get("file_type")
             message_id = data.get("message_id")
-            telegram_message_id = data.get("telegram_message_id")  # New: for editing
-            logging.debug(f"Получено сообщение из очереди: telegram_id={telegram_id}, text={text}, file={file_path}, message_id={message_id}, telegram_message_id={telegram_message_id}")
+            telegram_message_id = data.get("telegram_message_id")
+            ticket_id = data.get("ticket_id")  # Extract ticket_id
+            logging.debug(f"Получено сообщение из очереди: telegram_id={telegram_id}, text={text}, file={file_path}, message_id={message_id}, telegram_message_id={telegram_message_id}, ticket_id={ticket_id}")
             
             telegram_message = None
             try:
-                if telegram_message_id:  # Editing an existing message
+                if telegram_message_id:
                     logging.debug(f"Редактирование сообщения telegram_message_id={telegram_message_id}")
-                    # Check if there's an attachment
                     conn = sqlite3.connect("support.db", timeout=10)
                     cursor = conn.cursor()
                     cursor.execute("SELECT file_type FROM attachments WHERE message_id = ?", (message_id,))
@@ -541,21 +654,19 @@ async def process_message_queue():
                     conn.close()
                     
                     if attachment and attachment["file_type"] in ["image", "document"]:
-                        # Edit caption for media messages
                         await bot.edit_message_caption(
                             chat_id=telegram_id,
                             message_id=telegram_message_id,
                             caption=text
                         )
                     else:
-                        # Edit text for text messages
                         await bot.edit_message_text(
                             chat_id=telegram_id,
                             message_id=telegram_message_id,
                             text=text
                         )
                     logging.debug(f"Сообщение telegram_message_id={telegram_message_id} отредактировано в Telegram")
-                else:  # Sending a new message
+                else:
                     if file_path and file_type:
                         if not os.path.exists(file_path):
                             logging.error(f"Файл не найден: {file_path}")
@@ -575,7 +686,21 @@ async def process_message_queue():
                                 caption=text
                             )
                     else:
-                        telegram_message = await bot.send_message(chat_id=telegram_id, text=text)
+                        if ticket_id and "ваше обращение закрыто. вы можете оценить работу техподдержки ниже." in text.lower():
+                            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                                [
+                                    InlineKeyboardButton(text="👍", callback_data=f"rate_{ticket_id}_up"),
+                                    InlineKeyboardButton(text="👎", callback_data=f"rate_{ticket_id}_down")
+                                ]
+                            ])
+                            telegram_message = await bot.send_message(
+                                chat_id=telegram_id,
+                                text=text,
+                                reply_markup=keyboard
+                            )
+                            logging.debug(f"Sent closure message with rating buttons for ticket_id={ticket_id}")
+                        else:
+                            telegram_message = await bot.send_message(chat_id=telegram_id, text=text)
                 
                     if telegram_message and message_id:
                         conn = sqlite3.connect("support.db", timeout=10)

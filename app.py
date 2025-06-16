@@ -904,8 +904,9 @@ async def close_ticket(request: Request, ticket_id: int = Form(...), employee: d
 
         queue_data = {
             "telegram_id": telegram_id,
-            "text": "Ваше обращение закрыто",
-            "message_id": None
+            "text": "Ваше обращение закрыто. Вы можете оценить работу техподдержки ниже.",
+            "message_id": None,
+            "ticket_id": ticket_id
         }
         logging.debug(f"Добавляем уведомление о закрытии в очередь: {queue_data}")
         await message_queue.put(queue_data)
@@ -993,8 +994,7 @@ async def assign_ticket_endpoint(
             try:
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [
-                        InlineKeyboardButton(text="Открыть тикет", url=f"{BASE_URL}/ticket/{ticket_id}"),
-                        InlineKeyboardButton(text="Мини-чат", callback_data=f"minichat_{ticket_id}")
+                        InlineKeyboardButton(text="Открыть тикет", url=f"{BASE_URL}/ticket/{ticket_id}")
                     ]
                 ])
                 await bot.send_message(
@@ -1134,6 +1134,30 @@ async def fetch_telegram_history(
         logging.error(f"Ошибка при подтягивании истории: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/employee/{telegram_id}/ratings")
+async def get_employee_ratings(telegram_id: int, employee: dict = Depends(get_current_user)):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT 
+                (SELECT COUNT(*) FROM employee_ratings WHERE employee_id = ? AND rating = 'up') AS thumbs_up,
+                (SELECT COUNT(*) FROM employee_ratings WHERE employee_id = ? AND rating = 'down') AS thumbs_down
+            """,
+            (telegram_id, telegram_id)
+        )
+        ratings = cursor.fetchone()
+        conn.close()
+        return {
+            "status": "ok",
+            "thumbs_up": ratings["thumbs_up"],
+            "thumbs_down": ratings["thumbs_down"]
+        }
+    except Exception as e:
+        logging.error(f"Error fetching ratings for employee {telegram_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
 @app.get("/admin/employees", response_class=HTMLResponse)
 async def admin_employees(request: Request, employee: dict = Depends(get_current_user)):
     conn = get_db_connection()
@@ -1251,6 +1275,79 @@ async def unmute_user(
     conn.close()
     logging.debug(f"Мут снят с пользователя {telegram_id}")
     return {"status": "ok"}
+
+@app.get("/search", response_class=HTMLResponse)
+async def search_tickets(request: Request, query: str = Query(...), employee: dict = Depends(get_current_user)):
+    logging.debug(f"Поиск тикетов с запросом: {query}")
+    async with db_lock:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT DISTINCT t.ticket_id, t.telegram_id, e.login, 
+                       m.text AS last_message, m.timestamp AS last_message_timestamp,
+                       a.file_path, a.file_name, a.file_type,
+                       t.issue_type, t.assigned_to, e2.login AS assigned_login
+                FROM tickets t 
+                JOIN employees e ON t.telegram_id = e.telegram_id 
+                JOIN messages m ON t.ticket_id = m.ticket_id
+                LEFT JOIN attachments a ON m.message_id = a.message_id
+                LEFT JOIN employees e2 ON t.assigned_to = e2.telegram_id
+                WHERE m.text LIKE ?
+                ORDER BY m.timestamp DESC
+            """, (f"%{query}%",))
+            astana_tz = pytz.timezone('Asia/Almaty')
+            tickets = [
+                {
+                    "id": row["ticket_id"],
+                    "login": row["login"],
+                    "last_message": row["last_message"],
+                    "last_message_timestamp": datetime.fromisoformat(row["last_message_timestamp"]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S') if row["last_message_timestamp"] else None,
+                    "file_path": row["file_path"],
+                    "file_name": row["file_name"],
+                    "file_type": row["file_type"],
+                    "issue_type": row["issue_type"],
+                    "assigned_to": row["assigned_to"],
+                    "assigned_login": row["assigned_login"]
+                }
+                for row in cursor.fetchall()
+            ]
+    return templates.TemplateResponse("index.html", {"request": request, "tickets": tickets, "employee": employee})
+
+@app.get("/ticket/{ticket_id}/ratings")
+async def get_ticket_ratings(ticket_id: int, employee: dict = Depends(get_current_user)):
+    """
+    Retrieve the count of thumbs up and thumbs down ratings for a specific ticket.
+    """
+    try:
+        logging.debug(f"Запрос рейтингов для тикета #{ticket_id}")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            """
+            SELECT 
+                (SELECT COUNT(*) FROM ticket_ratings WHERE ticket_id = ? AND rating = 'up') AS thumbs_up,
+                (SELECT COUNT(*) FROM ticket_ratings WHERE ticket_id = ? AND rating = 'down') AS thumbs_down
+            """,
+            (ticket_id, ticket_id)
+        )
+        ratings = cursor.fetchone()
+        
+        conn.close()
+        
+        if not ratings:
+            logging.error(f"Рейтинги для тикета #{ticket_id} не найдены")
+            raise HTTPException(status_code=404, detail="Ratings not found")
+        
+        return {
+            "status": "ok",
+            "ticket_id": ticket_id,
+            "thumbs_up": ratings["thumbs_up"],
+            "thumbs_down": ratings["thumbs_down"]
+        }
+    except Exception as e:
+        logging.error(f"Ошибка при получении рейтингов тикета #{ticket_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/unban_user")
 async def unban_user(
