@@ -14,8 +14,8 @@
     <h2 class="text-xl mb-2">Добавить сотрудника</h2>
     <form action="/admin/employees/add" method="post" class="mb-4">
         <div class="flex space-x-2 mb-2">
-            <input type="text" name="telegram_id" placeholder="Telegram ID" class="p-2 border rounded" required>
-            <input type="text" name="login" placeholder="Логин" class="p-2 border rounded" required>
+            <input type="text" autocomplete="off" name="telegram_id" placeholder="Telegram ID" class="p-2 border rounded" required>
+            <input type="text" autocomplete="off" name="login" placeholder="Логин" class="p-2 border rounded" required>
             <label class="flex items-center">
                 <input type="checkbox" name="is_admin" class="mr-2"> Техподдержка
             </label>

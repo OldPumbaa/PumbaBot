@@ -989,8 +989,9 @@ async def assign_ticket_endpoint(
             "assigned_login": assigned_login
         })
 
-        await send_notification_to_topic(ticket_id, assigned_login or "Никто", f"Тикет переназначен на {assigned_login or 'никого'}")
+        # Отправляем уведомление в чат только если тикет назначен конкретному сотруднику
         if assigned_to_id:
+            await send_notification_to_topic(ticket_id, assigned_login, f"Тикет переназначен на {assigned_login}")
             try:
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [

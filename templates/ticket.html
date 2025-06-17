@@ -167,7 +167,7 @@
                 <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
                 <input type="hidden" name="telegram_id" value="{{ telegram_id }}">
                 <div class="flex-grow">
-                    <textarea name="text" id="message-input" placeholder="Введите сообщение" class="w-full p-2 border rounded min-h-[60px] max-h-[100px] overflow-y-auto resize-none" rows="3"></textarea>
+                    <textarea name="text" autocomplete="off" id="message-input" placeholder="Введите сообщение" class="w-full p-2 border rounded min-h-[60px] max-h-[100px] overflow-y-auto resize-none" rows="3"></textarea>
                 </div>
                 <div class="flex space-x-2">
                     <input type="file" name="file" id="file-input" accept="image/*,.pdf,.txt,.log" class="hidden">
@@ -195,7 +195,7 @@
             <form id="send-admin-message-form" class="flex space-x-2 items-start">
                 <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
                 <div class="flex-grow">
-                    <textarea name="text" id="admin-message-input" placeholder="Внутренний чат ТП" class="w-full p-2 border rounded min-h-[60px] max-h-[100px] overflow-y-auto resize-none" rows="3"></textarea>
+                    <textarea name="text" autocomplete="off" id="admin-message-input" placeholder="Внутренний чат ТП" class="w-full p-2 border rounded min-h-[60px] max-h-[100px] overflow-y-auto resize-none" rows="3"></textarea>
                 </div>
                 <button type="submit" class="bg-green-500 text-white p-2 rounded">Отправить</button>
             </form>
@@ -230,7 +230,7 @@
             <span class="close" onclick="closeModal('muteModal')">×</span>
             <h2>Мут пользователя</h2>
             <form id="mute-form-modal" class="mt-4">
-                <input type="number" name="mute_duration" placeholder="Минут" class="p-2 border rounded w-24 mr-2" required>
+                <input type="number" autocomplete="off" name="mute_duration" placeholder="Минут" class="p-2 border rounded w-24 mr-2" required>
                 <button type="submit" class="bg-yellow-500 text-white p-2 rounded">Мут</button>
             </form>
         </div>
@@ -242,7 +242,7 @@
             <span class="close" onclick="closeModal('banModal')">×</span>
             <h2>Бан пользователя</h2>
             <form id="ban-form-modal" class="mt-4">
-                <input type="number" name="ban_duration" placeholder="Минут (необяз.)" class="p-2 border rounded w-24 mr-2">
+                <input type="number" name="ban_duration" autocomplete="off" placeholder="Минут (необяз.)" class="p-2 border rounded w-24 mr-2">
                 <label class="mr-2"><input type="checkbox" name="permanent"> Навсегда</label>
                 <button type="submit" class="bg-red-500 text-white p-2 rounded">Бан</button>
             </form>
@@ -257,7 +257,7 @@
             <form id="edit-message-form" class="mt-4">
                 <input type="hidden" name="message_id" id="edit-message-id">
                 <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
-                <textarea name="text" id="edit-message-text" class="w-full p-2 border rounded min-h-[60px] max-h-[100px] overflow-y-auto resize-none" rows="3"></textarea>
+                <textarea name="text" autocomplete="off" id="edit-message-text" class="w-full p-2 border rounded min-h-[60px] max-h-[100px] overflow-y-auto resize-none" rows="3"></textarea>
                 <button type="submit" class="bg-blue-500 text-white p-2 rounded mt-2">Сохранить</button>
             </form>
         </div>
@@ -269,8 +269,8 @@
             <span class="close" onclick="closeModal('addQuickReplyModal')">×</span>
             <h2>Добавить быстрый ответ</h2>
             <form id="add-quick-reply-form" class="mt-4">
-                <input type="text" name="title" placeholder="Название кнопки" class="p-2 border rounded w-full mb-2" required>
-                <textarea name="text" placeholder="Текст ответа" class="w-full p-2 border rounded min-h-[60px] max-h-[100px] overflow-y-auto resize-none mb-2" rows="3" required></textarea>
+                <input type="text" autocomplete="off" name="title" placeholder="Название кнопки" class="p-2 border rounded w-full mb-2" required>
+                <textarea name="text" autocomplete="off" placeholder="Текст ответа" class="w-full p-2 border rounded min-h-[60px] max-h-[100px] overflow-y-auto resize-none mb-2" rows="3" required></textarea>
                 <select name="color" class="p-2 border rounded w-full mb-2" required>
                     <option value="blue">Синий</option>
                     <option value="green">Зелёный</option>
@@ -935,36 +935,50 @@
     });
 
     document.getElementById('message-input').addEventListener('paste', async (e) => {
-        e.preventDefault();
-        const items = (e.clipboardData || e.originalEvent.clipboardData).items;
-        for (const item of items) {
-            if (item.type.startsWith('image/')) {
-                const file = item.getAsFile();
-                const formData = new FormData();
-                formData.append('ticket_id', '{{ ticket_id }}');
-                formData.append('telegram_id', '{{ telegram_id }}');
-                const inputText = document.getElementById('message-input').value;
-                formData.append('text', inputText);
-                formData.append('file', file, `screenshot-${Date.now()}.png`);
-                formData.append('issue_type', document.getElementById('issue-type-select').value);
-                try {
-                    const response = await fetch('/send_message', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    const data = await response.json();
-                    if (data.status === 'ok') {
-                        document.getElementById('send-message-form').reset();
-                    } else {
-                        showNotification('Не удалось отправить изображение: ' + data.message, 'error');
-                    }
-                } catch (error) {
-                    showNotification('Не удалось отправить изображение', 'error');
+    const clipboardData = e.clipboardData || e.originalEvent.clipboardData;
+    const items = clipboardData.items;
+
+    // Проверяем, есть ли изображение в буфере обмена
+    for (const item of items) {
+        if (item.type.startsWith('image/')) {
+            e.preventDefault(); // Блокируем стандартную вставку только для изображений
+            const file = item.getAsFile();
+            const formData = new FormData();
+            formData.append('ticket_id', '{{ ticket_id }}');
+            formData.append('telegram_id', '{{ telegram_id }}');
+            const inputText = document.getElementById('message-input').value;
+            formData.append('text', inputText);
+            formData.append('file', file, `screenshot-${Date.now()}.png`);
+            formData.append('issue_type', document.getElementById('issue-type-select').value);
+            try {
+                const response = await fetch('/send_message', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    document.getElementById('send-message-form').reset();
+                } else {
+                    showNotification('Не удалось отправить изображение: ' + data.message, 'error');
                 }
-                break;
+            } catch (error) {
+                showNotification('Не удалось отправить изображение', 'error');
             }
+            return; // Прерываем обработку после отправки изображения
         }
-    });
+    }
+
+    // Если нет изображения, вставляем текст из буфера обмена
+    const text = clipboardData.getData('text/plain');
+    if (text) {
+        const textarea = document.getElementById('message-input');
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        textarea.value = textarea.value.substring(0, start) + text + textarea.value.substring(end);
+        textarea.selectionStart = textarea.selectionEnd = start + text.length;
+        textarea.dispatchEvent(new Event('input')); // Триггерим событие input для авторесайза
+    }
+});
 
     document.addEventListener('DOMContentLoaded', function () {
         const closeTicketButton = document.querySelector('button[data-action="close-ticket"]');
@@ -1030,5 +1044,5 @@
         fetchHistory();
     });
 </script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9513530baddfbca3',t:'MTc1MDE3MTQ2MC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>

@@ -16,7 +16,7 @@
     </div>
     <div class="mb-4">
         <form action="/search" method="get" class="flex items-center">
-            <input type="text" name="query" placeholder="Поиск по тикетам..." value="{{ request.query_params.get('query', '') }}" class="border p-2 rounded-l-md w-full max-w-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <input type="text" autocomplete="off" name="query" placeholder="Поиск по тикетам..." value="{{ request.query_params.get('query', '') }}" class="border p-2 rounded-l-md w-full max-w-md focus:outline-none focus:ring-2 focus:ring-blue-500">
             <button type="submit" class="bg-blue-500 text-white p-2 rounded-r-md hover:bg-blue-600">Найти</button>
             {% if request.query_params.get('query') %}
                 <a href="/" class="ml-2 text-blue-500 underline hover:text-blue-700">Сбросить поиск</a>
