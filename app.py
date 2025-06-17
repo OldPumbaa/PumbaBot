@@ -1052,10 +1052,11 @@ async def fetch_telegram_history(
     request: Request, 
     ticket_id: int = Form(...), 
     telegram_id: int = Form(...), 
+    displayed_ticket_ids: str = Form(""),  # Comma-separated list of ticket IDs
     employee: dict = Depends(get_current_user)
 ):
     try:
-        logging.debug(f"Подтягивание истории для ticket_id={ticket_id}, telegram_id={telegram_id}")
+        logging.debug(f"Fetching history for ticket_id={ticket_id}, telegram_id={telegram_id}, displayed_ticket_ids={displayed_ticket_ids}")
         
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1065,29 +1066,33 @@ async def fetch_telegram_history(
             conn.close()
             raise HTTPException(status_code=404, detail="Ticket not found or invalid telegram_id")
 
-        cursor.execute(
-            """
+        # Parse displayed ticket IDs
+        displayed_ids = [int(tid) for tid in displayed_ticket_ids.split(",") if tid.strip().isdigit()]
+
+        # Fetch the next closed ticket, excluding displayed ones
+        query = """
             SELECT t.ticket_id
             FROM tickets t
             WHERE t.telegram_id = ? AND t.status = 'closed'
-            AND t.ticket_id NOT IN (
-                SELECT fetched_ticket_id FROM history_fetched WHERE current_ticket_id = ?
-            )
-            ORDER BY t.created_at DESC
-            LIMIT 1
-            """,
-            (telegram_id, ticket_id)
-        )
+        """
+        params = [telegram_id]
+        if displayed_ids:
+            query += " AND t.ticket_id NOT IN ({})".format(",".join("?" * len(displayed_ids)))
+            params.extend(displayed_ids)
+        query += " ORDER BY t.created_at DESC LIMIT 1"
+        
+        cursor.execute(query, params)
         next_ticket = cursor.fetchone()
 
         if not next_ticket:
             conn.close()
-            await sio.emit("no_more_history", {"ticket_id": ticket_id, "message": "Больше истории нет"})
-            logging.debug("Нет больше закрытых тикетов для подтягивания")
+            await sio.emit("no_more_history", {"ticket_id": ticket_id, "message": "No more history available"})
+            logging.debug("No more closed tickets to fetch")
             return {"status": "no_more_history"}
 
         fetched_ticket_id = next_ticket[0]
-
+        astana_tz = pytz.timezone('Asia/Almaty')
+        
         cursor.execute(
             """
             SELECT m.message_id, m.ticket_id, m.telegram_id, m.text, m.is_from_bot, m.timestamp, e.login,
@@ -1096,17 +1101,16 @@ async def fetch_telegram_history(
             JOIN employees e ON m.telegram_id = e.telegram_id
             LEFT JOIN attachments a ON m.message_id = a.message_id
             WHERE m.ticket_id = ?
-            ORDER BY m.timestamp
+            ORDER BY m.timestamp DESC
             """,
             (fetched_ticket_id,)
         )
-        astana_tz = pytz.timezone('Asia/Almaty')
         messages = [
             {
                 "message_id": row[0],
                 "ticket_id": row[1],
                 "telegram_id": row[2],
-                "text": f"[Тикет #{row[1]}] {row[3]}",
+                "text": f"[Ticket #{row[1]}] {row[3]}",
                 "is_from_bot": bool(row[4]),
                 "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
                 "login": row[6],
@@ -1117,21 +1121,16 @@ async def fetch_telegram_history(
             for row in cursor.fetchall()
         ]
 
-        cursor.execute(
-            "INSERT INTO history_fetched (current_ticket_id, fetched_ticket_id, fetched_at) VALUES (?, ?, ?)",
-            (ticket_id, fetched_ticket_id, datetime.now(astana_tz).isoformat())
-        )
-        conn.commit()
         conn.close()
 
         for msg in messages:
             await sio.emit("new_message", msg)
-            logging.debug(f"Отправлено сообщение из тикета #{fetched_ticket_id}: {msg}")
+            logging.debug(f"Sent message from ticket #{msg['ticket_id']}: {msg}")
 
-        logging.debug(f"Подтянута история из тикета #{fetched_ticket_id}, отправлено {len(messages)} сообщений")
-        return {"status": "ok", "fetched_ticket_id": fetched_ticket_id, "messages_count": len(messages)}
+        logging.debug(f"Fetched history from ticket #{fetched_ticket_id}, sent {len(messages)} messages")
+        return {"status": "ok", "fetched_ticket_ids": [fetched_ticket_id], "messages_count": len(messages)}
     except Exception as e:
-        logging.error(f"Ошибка при подтягивании истории: {e}")
+        logging.error(f"Error fetching history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/employee/{telegram_id}/ratings")

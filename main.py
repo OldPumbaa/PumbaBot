@@ -3,6 +3,8 @@ import uvicorn
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, ContentType, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from app import app, sio, message_queue, set_event_loop, send_notification_to_topic
 from dotenv import load_dotenv
 import os
@@ -33,6 +35,10 @@ if not BOT_TOKEN or not ADMIN_TELEGRAM_ID:
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# Define registration states
+class RegistrationStates(StatesGroup):
+    waiting_for_login = State()
 
 def init_db():
     logging.debug("Начало инициализации базы данных")
@@ -81,16 +87,6 @@ def init_db():
             timestamp TEXT,
             FOREIGN KEY (ticket_id) REFERENCES tickets (ticket_id),
             FOREIGN KEY (telegram_id) REFERENCES employees (telegram_id)
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS history_fetched (
-            current_ticket_id INTEGER,
-            fetched_ticket_id INTEGER,
-            fetched_at TEXT,
-            PRIMARY KEY (current_ticket_id, fetched_ticket_id),
-            FOREIGN KEY (current_ticket_id) REFERENCES tickets (ticket_id),
-            FOREIGN KEY (fetched_ticket_id) REFERENCES tickets (ticket_id)
         )
     """)
     cursor.execute("""
@@ -146,17 +142,17 @@ def init_db():
         )
     """)
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS employee_ratings (
-        rating_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticket_id INTEGER,
-        employee_id INTEGER,
-        rating TEXT CHECK(rating IN ('up', 'down')),
-        timestamp TEXT,
-        FOREIGN KEY (ticket_id) REFERENCES tickets (ticket_id),
-        FOREIGN KEY (employee_id) REFERENCES employees (telegram_id),
-        UNIQUE (ticket_id, employee_id)
-    )
-""")
+        CREATE TABLE IF NOT EXISTS employee_ratings (
+            rating_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id INTEGER,
+            employee_id INTEGER,
+            rating TEXT CHECK(rating IN ('up', 'down')),
+            timestamp TEXT,
+            FOREIGN KEY (ticket_id) REFERENCES tickets (ticket_id),
+            FOREIGN KEY (employee_id) REFERENCES employees (telegram_id),
+            UNIQUE (ticket_id, employee_id)
+        )
+    """)
     cursor.execute("PRAGMA table_info(messages)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'telegram_message_id' not in columns:
@@ -256,7 +252,7 @@ def remove_ban(user_id: int):
     conn.close()
 
 @dp.message(Command(commands=["start"]))
-async def start_command(message: Message):
+async def start_command(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     conn = sqlite3.connect("support.db", timeout=10)
     cursor = conn.cursor()
@@ -271,7 +267,45 @@ async def start_command(message: Message):
         else:
             await message.reply(f"Добро пожаловать, {login}! Вы можете создавать тикеты, отправив сообщение или файл.")
     else:
-        await message.reply(f"Вы не авторизованы. Попросите администратора добавить ваш Telegram ID. Ваш ID: {telegram_id}")
+        await message.reply("Вы не зарегистрированы. Пожалуйста, укажите ваш логин для регистрации.")
+        await state.set_state(RegistrationStates.waiting_for_login)
+
+@dp.message(RegistrationStates.waiting_for_login)
+async def process_registration_login(message: Message, state: FSMContext):
+    telegram_id = message.from_user.id
+    login = message.text.strip()
+
+    # Validate login: must be an email (contains @) and no # allowed for regular users
+    if not login or len(login) > 50:
+        await message.reply("Некорректный логин. Логин должен быть до 50 символов.")
+        return
+    if '#' in login:
+        await message.reply("Символ '#' зарезервирован для администраторов. Укажите логин в формате электронной почты.")
+        return
+    if not re.match(r'^[\w\-\.@]+$', login) or '@' not in login:
+        await message.reply("Некорректный логин. Используйте формат электронной почты (например, user@domain.com).")
+        return
+
+    conn = sqlite3.connect("support.db", timeout=10)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO employees (telegram_id, login, is_admin) VALUES (?, ?, ?)",
+            (telegram_id, login, False)
+        )
+        conn.commit()
+        await message.reply(f"Регистрация завершена! Добро пожаловать, {login}! Вы можете создавать тикеты, отправив сообщение или файл.")
+        logging.debug(f"Зарегистрирован новый пользователь: telegram_id={telegram_id}, login={login}")
+    except sqlite3.IntegrityError:
+        await message.reply("Этот логин уже занят. Пожалуйста, выберите другой логин.")
+        return
+    except Exception as e:
+        logging.error(f"Ошибка при регистрации пользователя telegram_id={telegram_id}: {e}")
+        await message.reply("Произошла ошибка при регистрации. Попробуйте снова.")
+        return
+    finally:
+        conn.close()
+        await state.clear()
 
 @dp.message(Command(commands=["myid"]))
 async def my_id_command(message: Message):
@@ -300,7 +334,7 @@ async def handle_file(message: Message, file_type: str):
     conn.close()
 
     if not employee:
-        await message.reply("Вы не авторизованы. Попросите администратора добавить ваш Telegram ID.")
+        await message.reply("Вы не зарегистрированы. Используйте команду /start для регистрации.")
         return
 
     login = employee[0]
@@ -401,7 +435,12 @@ async def handle_voice(message: Message):
     logging.debug(f"Отправлен ответ на голосовое сообщение для telegram_id={telegram_id}")
 
 @dp.message(F.text)
-async def handle_text_message(message: Message):
+async def handle_text_message(message: Message, state: FSMContext):
+    # Skip if user is in registration state
+    current_state = await state.get_state()
+    if current_state == RegistrationStates.waiting_for_login.state:
+        return  # Let the registration handler process this message
+
     telegram_id = message.from_user.id
     if is_banned(telegram_id):
         return
@@ -416,7 +455,7 @@ async def handle_text_message(message: Message):
     conn.close()
 
     if not employee:
-        await message.reply("Вы не авторизованы. Попросите администратора добавить ваш Telegram ID.")
+        await message.reply("Вы не зарегистрированы. Используйте команду /start для регистрации.")
         return
 
     login = employee[0]
@@ -498,7 +537,7 @@ async def handle_minichat(callback: CallbackQuery):
     cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
     employee = cursor.fetchone()
     if not employee:
-        await callback.message.answer("Вы не авторизованы.")
+        await callback.message.answer("Вы не зарегистрированы.")
         conn.close()
         await callback.answer()
         return
@@ -593,7 +632,6 @@ async def handle_rating(callback: CallbackQuery):
         conn.commit()
         logging.debug(f"Rating {rating} saved for ticket #{ticket_id}, employee_id={assigned_to}")
 
-        # Emit event to update employee ratings in web app
         cursor.execute(
             """
             SELECT 

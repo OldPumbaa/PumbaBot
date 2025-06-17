@@ -101,7 +101,7 @@
             </form>
             {% endif %}
             <button onclick="window.location.href='/'" class="bg-gray-500 text-white p-2 rounded">Назад</button>
-            <button id="fetch-history-btn" class="bg-green-500 text-white p-2 rounded">Подтянуть историю</button>
+            <button id="fetch-history-btn" class="bg-green-500 text-white p-2 rounded" onclick="fetchHistory()">Подтянуть историю</button>
             <button id="close-ticket-btn" class="bg-red-500 text-white p-2 rounded">Закрыть тикет</button>
         </div>
     </div>
@@ -295,676 +295,740 @@
     </div>
     
     <script>
-        function shortenFilename(filename) {
-            if (!filename) return 'unknown';
-            if (filename.length > 20) {
-                return filename.substring(0, 17) + '...';
-            }
-            return filename;
-        }
+    let displayedTicketIds = new Set([{{ ticket_id }}]);
+    let renderedMessageIds = new Set(); // Для отслеживания отрисованных сообщений
 
-        const socket = io('http://localhost:8080', { transports: ['websocket'] });
-        socket.on('connect', () => {
-            console.log('Подключено к SocketIO');
+    function shortenFilename(filename) {
+        if (!filename) return 'unknown';
+        if (filename.length > 20) {
+            return filename.substring(0, 17) + '...';
+        }
+        return filename;
+    }
+
+    const socket = io('http://localhost:8080', { transports: ['websocket'] });
+    socket.on('connect', () => {
+        console.log('Соединение с Socket.IO установлено');
+    });
+
+    socket.on('new_message', (data) => {
+        console.log('Новое сообщение:', {
+            ticket_id: data.ticket_id,
+            text: data.text,
+            timestamp: data.timestamp,
+            login: data.login,
+            is_from_bot: data.is_from_bot,
+            message_id: data.message_id,
+            file_type: data.file_type,
+            file_path: data.file_path,
+            file_name: data.file_name
         });
 
-        socket.on('new_message', (data) => {
-            console.log('Новое сообщение:', data);
-            if (!data.ticket_id || !data.text || !data.timestamp) {
-                console.error('Некорректные данные сообщения:', data);
-                return;
+        // Проверка на наличие текста и дублирование
+        if (!data.text) {
+            console.error('Сообщение без текста, пропускаем:', data);
+            return;
+        }
+        if (data.message_id && renderedMessageIds.has(data.message_id)) {
+            console.log('Сообщение уже отрисовано, пропускаем:', data.message_id);
+            return;
+        }
+        if (data.message_id) {
+            renderedMessageIds.add(data.message_id);
+        }
+
+        const messagesDiv = document.getElementById('messages');
+        if (!messagesDiv) {
+            console.error('Элемент #messages не найден');
+            return;
+        }
+
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message-container ${data.is_from_bot ? 'justify-end' : 'justify-start'} mb-2`;
+        messageDiv.id = `message-${data.message_id || 'temp-' + Math.random().toString(36).substring(2)}`;
+        const isHistoryMessage = data.text.startsWith('[Тикет #') || data.text.startsWith('[Ticket #');
+
+        // Экранирование текста для защиты от XSS
+        const escapeHtml = (str) => {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        };
+
+        messageDiv.innerHTML = `
+            ${data.is_from_bot ? `
+            <div class="message-actions">
+                <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id || ''}" data-ticket-id="${data.ticket_id || ''}" data-text="${escapeHtml(data.text || '')}" title="Редактировать">
+                    <i class="fas fa-edit"></i>
+                </span>
+                <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id || ''}" data-ticket-id="${data.ticket_id || ''}" title="Удалить">
+                    <i class="fas fa-trash"></i>
+                </span>
+            </div>
+            ` : ''}
+            <div class="message-text-container">
+                <p class="message-text bg-${isHistoryMessage ? 'yellow-200' : (data.is_from_bot ? 'blue-200' : 'gray-200')} px-2 rounded whitespace-pre-wrap">
+                    ${escapeHtml(data.login || 'Unknown')}: ${escapeHtml(data.text)}
+                    ${data.file_type ? `
+                        ${data.file_type === 'image' ? `
+                            <img src="/${escapeHtml(data.file_path || '')}" alt="${escapeHtml(data.file_name || 'image')}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/${escapeHtml(data.file_path || '')}')">
+                        ` : `
+                            <a href="/${escapeHtml(data.file_path || '')}" class="inline-block text-blue-500 underline">${shortenFilename(data.file_name)}</a>
+                        `}
+                    ` : ''}
+                    <span class="timestamp text-xs text-gray-500"> (${escapeHtml(data.timestamp || 'N/A')})</span>
+                </p>
+            </div>
+        `;
+
+        displayedTicketIds.add(data.ticket_id); // Отслеживаем ID тикета
+
+        if (isHistoryMessage) {
+            console.log('Добавляем сообщение истории в начало:', data.text);
+            messagesDiv.prepend(messageDiv);
+        } else {
+            console.log('Добавляем сообщение в конец:', data.text);
+            messagesDiv.appendChild(messageDiv);
+            const isAtBottom = messagesDiv.scrollTop + messagesDiv.clientHeight >= messagesDiv.scrollHeight - 10;
+            if (isAtBottom) {
+                messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
             }
-            const messagesDiv = document.getElementById('messages');
+        }
+
+        bindMessageActions();
+    });
+
+    socket.on('new_admin_message', (data) => {
+        console.log('Новое сообщение в админ-чате:', data);
+        if (data.ticket_id === {{ ticket_id }}) {
+            const adminMessagesDiv = document.getElementById('admin-messages');
             const messageDiv = document.createElement('div');
-            messageDiv.className = `message-container ${data.is_from_bot ? 'justify-end' : 'justify-start'} mb-2`;
-            messageDiv.id = `message-${data.message_id}`;
-            const isHistoryMessage = data.text.startsWith('[Тикет #');
+            messageDiv.className = 'message-container text-left mb-2';
             messageDiv.innerHTML = `
-                ${data.is_from_bot ? `
-                <div class="message-actions">
-                    <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" data-text="${data.text}" title="Редактировать">
-                        <i class="fas fa-edit"></i>
-                    </span>
-                    <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" title="Удалить">
-                        <i class="fas fa-trash"></i>
-                    </span>
-                </div>
-                ` : ''}
-                <div class="message-text-container">
-                    <p class="message-text bg-${isHistoryMessage ? 'yellow-200' : (data.is_from_bot ? 'blue-200' : 'gray-200')} px-2 rounded whitespace-pre-wrap">
-                        ${data.login || 'Unknown'}: ${data.text}
-                        ${data.file_type ? `
-                            ${data.file_type === 'image' ? `
-                                <img src="/${data.file_path || ''}" alt="${data.file_name || 'image'}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/${data.file_path || ''}')">
-                            ` : `
-                                <a href="/${data.file_path || ''}" class="inline-block text-blue-500 underline">${shortenFilename(data.file_name)}</a>
-                            `}
-                        ` : ''}
-                        <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
-                    </p>
-                </div>
+                <p class="message-text inline-block bg-green-200 px-2 rounded whitespace-pre-wrap">
+                    ${data.login || 'Unknown'}: ${data.text}
+                    <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
+                </p>
             `;
-            if (isHistoryMessage) {
-                messagesDiv.prepend(messageDiv);
-            } else if (data.ticket_id === {{ ticket_id }}) {
-                messagesDiv.appendChild(messageDiv);
-                const isAtBottom = messagesDiv.scrollTop + messagesDiv.clientHeight >= messagesDiv.scrollHeight - 10;
-                if (isAtBottom) {
-                    messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
-                }
+            adminMessagesDiv.appendChild(messageDiv);
+            const isAtBottom = adminMessagesDiv.scrollTop + adminMessagesDiv.clientHeight >= adminMessagesDiv.scrollHeight - 10;
+            if (isAtBottom) {
+                adminMessagesDiv.scrollTo({ top: adminMessagesDiv.scrollHeight, behavior: 'smooth' });
             }
-            bindMessageActions();
-        });
+        }
+    });
 
-        socket.on('new_admin_message', (data) => {
-            console.log('Новое сообщение в админ-чате:', data);
-            if (data.ticket_id === {{ ticket_id }}) {
-                const adminMessagesDiv = document.getElementById('admin-messages');
-                const messageDiv = document.createElement('div');
-                messageDiv.className = 'message-container text-left mb-2';
+    socket.on('no_more_history', (data) => {
+        if (data.ticket_id === {{ ticket_id }}) {
+            showNotification('Больше истории нет', 'info');
+            document.getElementById('fetch-history-btn').disabled = true;
+        }
+    });
+
+    socket.on('ticket_assigned', (data) => {
+        if (data.ticket_id === {{ ticket_id }}) {
+            const assignSelect = document.getElementById('assign-to-select');
+            assignSelect.value = data.assigned_to || '';
+        }
+    });
+
+    socket.on('issue_type_updated', (data) => {
+        if (data.ticket_id === {{ ticket_id }}) {
+            const issueTypeSelect = document.getElementById('issue-type-select');
+            issueTypeSelect.value = data.issue_type || 'n/a';
+        }
+    });
+
+    socket.on('ticket_closed', (data) => {
+        if (data.ticket_id === {{ ticket_id }}) {
+            window.location.href = '/';
+        }
+    });
+
+    socket.on('message_deleted', (data) => {
+        if (data.ticket_id === {{ ticket_id }}) {
+            const messageDiv = document.getElementById(`message-${data.message_id}`);
+            if (messageDiv) {
+                messageDiv.remove();
+                showNotification('Сообщение удалено', 'success');
+            }
+        }
+    });
+
+    socket.on('message_edited', (data) => {
+        if (data.ticket_id === {{ ticket_id }}) {
+            const messageDiv = document.getElementById(`message-${data.message_id}`);
+            if (messageDiv) {
                 messageDiv.innerHTML = `
-                    <p class="message-text inline-block bg-green-200 px-2 rounded whitespace-pre-wrap">
-                        ${data.login || 'Unknown'}: ${data.text}
-                        <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
-                    </p>
+                    <div class="message-actions">
+                        <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" data-text="${data.text}" title="Редактировать">
+                            <i class="fas fa-edit"></i>
+                        </span>
+                        <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" title="Удалить">
+                            <i class="fas fa-trash"></i>
+                        </span>
+                    </div>
+                    <div class="message-text-container">
+                        <p class="message-text bg-blue-200 px-2 rounded whitespace-pre-wrap">
+                            ${data.login || 'Unknown'}: ${data.text}
+                            <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
+                        </p>
+                    </div>
                 `;
-                adminMessagesDiv.appendChild(messageDiv);
-                const isAtBottom = adminMessagesDiv.scrollTop + adminMessagesDiv.clientHeight >= adminMessagesDiv.scrollHeight - 10;
-                if (isAtBottom) {
-                    adminMessagesDiv.scrollTo({ top: adminMessagesDiv.scrollHeight, behavior: 'smooth' });
-                }
+                bindMessageActions();
+                showNotification('Сообщение обновлено', 'success');
             }
-        });
+        }
+    });
 
-        socket.on('no_more_history', (data) => {
-            if (data.ticket_id === {{ ticket_id }}) {
-                showNotification('Больше истории нет', 'info');
-                document.getElementById('fetch-history-btn').disabled = true;
-            }
-        });
+    socket.on('quick_reply_deleted', (data) => {
+        console.log('Быстрый ответ удалён:', data);
+        const quickReplyContainer = document.querySelector(`.delete-quick-reply-form[data-quick-reply-id="${data.id}"]`)?.closest('.quick-reply-container');
+        if (quickReplyContainer) {
+            quickReplyContainer.remove();
+            showNotification('Быстрый ответ удалён', 'success');
+        }
+    });
 
-        socket.on('ticket_assigned', (data) => {
-            if (data.ticket_id === {{ ticket_id }}) {
-                const assignSelect = document.getElementById('assign-to-select');
-                assignSelect.value = data.assigned_to || '';
-            }
-        });
-
-        socket.on('issue_type_updated', (data) => {
-            if (data.ticket_id === {{ ticket_id }}) {
-                const issueTypeSelect = document.getElementById('issue-type-select');
-                issueTypeSelect.value = data.issue_type || 'n/a';
-            }
-        });
-
-        socket.on('ticket_closed', (data) => {
-            if (data.ticket_id === {{ ticket_id }}) {
-                window.location.href = '/';
-            }
-        });
-
-        socket.on('message_deleted', (data) => {
-            if (data.ticket_id === {{ ticket_id }}) {
-                const messageDiv = document.getElementById(`message-${data.message_id}`);
-                if (messageDiv) {
-                    messageDiv.remove();
-                    showNotification('Сообщение удалено', 'success');
-                }
-            }
-        });
-
-        socket.on('message_edited', (data) => {
-            if (data.ticket_id === {{ ticket_id }}) {
-                const messageDiv = document.getElementById(`message-${data.message_id}`);
-                if (messageDiv) {
-                    messageDiv.innerHTML = `
-                        <div class="message-actions">
-                            <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" data-text="${data.text}" title="Редактировать">
-                                <i class="fas fa-edit"></i>
-                            </span>
-                            <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" title="Удалить">
-                                <i class="fas fa-trash"></i>
-                            </span>
-                        </div>
-                        <div class="message-text-container">
-                            <p class="message-text bg-blue-200 px-2 rounded whitespace-pre-wrap">
-                                ${data.login || 'Unknown'}: ${data.text}
-                                <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
-                            </p>
-                        </div>
-                    `;
-                    bindMessageActions();
-                    showNotification('Сообщение обновлено', 'success');
-                }
-            }
-        });
-
-        socket.on('quick_reply_deleted', (data) => {
-            console.log('Быстрый ответ удалён:', data);
-            const quickReplyContainer = document.querySelector(`.delete-quick-reply-form[data-quick-reply-id="${data.id}"]`)?.closest('.quick-reply-container');
-            if (quickReplyContainer) {
-                quickReplyContainer.remove();
-                showNotification('Быстрый ответ удалён', 'success');
-            }
-        });
-
-        socket.on('quick_reply_added', (data) => {
-            console.log('Быстрый ответ добавлен:', data);
-            const quickRepliesDiv = document.getElementById('quick-replies');
-            const containerDiv = document.createElement('div');
-            containerDiv.className = 'quick-reply-container inline-flex items-center';
-            containerDiv.innerHTML = `
-                <button class="bg-${data.color}-500 text-white px-3 py-1 rounded hover:bg-${data.color}-600 text-sm quick-reply-btn" data-text="${data.text}">
-                    ${data.title}
+    socket.on('quick_reply_added', (data) => {
+        console.log('Быстрый ответ добавлен:', data);
+        const quickRepliesDiv = document.getElementById('quick-replies');
+        const containerDiv = document.createElement('div');
+        containerDiv.className = 'quick-reply-container inline-flex items-center';
+        containerDiv.innerHTML = `
+            <button class="bg-${data.color}-500 text-white px-3 py-1 rounded hover:bg-${data.color}-600 text-sm quick-reply-btn" data-text="${data.text}">
+                ${data.title}
+            </button>
+            {% if employee.is_admin %}
+            <form action="/delete_quick_reply" method="post" class="inline ml-1 delete-quick-reply-form" data-quick-reply-id="${data.id}">
+                <input type="hidden" name="quick_reply_id" value="${data.id}">
+                <button type="submit" class="delete-quick-reply-btn cursor-pointer" title="Удалить" data-quick-reply-id="${data.id}">
+                    <i class="fas fa-times"></i>
                 </button>
-                {% if employee.is_admin %}
-                <form action="/delete_quick_reply" method="post" class="inline ml-1 delete-quick-reply-form" data-quick-reply-id="${data.id}">
-                    <input type="hidden" name="quick_reply_id" value="${data.id}">
-                    <button type="submit" class="delete-quick-reply-btn cursor-pointer" title="Удалить" data-quick-reply-id="${data.id}">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </form>
-                {% endif %}
-            `;
-            quickRepliesDiv.insertBefore(containerDiv, quickRepliesDiv.lastElementChild);
-            bindMessageActions();
-            showNotification('Быстрый ответ добавлен', 'success');
+            </form>
+            {% endif %}
+        `;
+        quickRepliesDiv.insertBefore(containerDiv, quickRepliesDiv.lastElementChild);
+        bindMessageActions();
+        showNotification('Быстрый ответ добавлен', 'success');
+    });
+
+    function showNotification(message, type) {
+        const notification = document.createElement('div');
+        notification.className = `fixed bottom-4 right-4 p-4 rounded text-white ${type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : 'bg-blue-500'}`;
+        notification.textContent = message;
+        document.body.appendChild(notification);
+        setTimeout(() => notification.remove(), 3000);
+    }
+
+    function bindMessageActions() {
+        document.querySelectorAll('.edit-message-btn').forEach(button => {
+            button.removeEventListener('click', handleEditClick);
+            button.addEventListener('click', handleEditClick);
         });
+        document.querySelectorAll('.delete-message-btn').forEach(button => {
+            button.removeEventListener('click', handleDeleteClick);
+            button.addEventListener('click', handleDeleteClick);
+        });
+        document.querySelectorAll('.delete-quick-reply-form').forEach(form => {
+            form.removeEventListener('submit', handleDeleteQuickReplyClick);
+            form.addEventListener('submit', handleDeleteQuickReplyClick);
+        });
+        document.querySelectorAll('.quick-reply-btn').forEach(button => {
+            button.removeEventListener('click', handleQuickReplyClick);
+            button.addEventListener('click', handleQuickReplyClick);
+        });
+    }
 
-        function showNotification(message, type) {
-            const notification = document.createElement('div');
-            notification.className = `fixed bottom-4 right-4 p-4 rounded text-white ${type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : 'bg-blue-500'}`;
-            notification.textContent = message;
-            document.body.appendChild(notification);
-            setTimeout(() => notification.remove(), 3000);
+    function handleEditClick() {
+        const messageId = this.dataset.messageId;
+        const text = this.dataset.text;
+        document.getElementById('edit-message-id').value = messageId;
+        document.getElementById('edit-message-text').value = text;
+        openModal('editMessageModal');
+    }
+
+    function handleDeleteClick() {
+        const messageId = this.dataset.messageId;
+        const ticketId = this.dataset.ticketId;
+        if (confirm('Вы уверены, что хотите удалить это сообщение?')) {
+            const formData = new FormData();
+            formData.append('message_id', messageId);
+            formData.append('ticket_id', ticketId);
+            fetch('/delete_message', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status !== 'ok') {
+                    throw new Error(data.detail || 'Ошибка удаления сообщения');
+                }
+            })
+            .catch(error => {
+                showNotification(error.message, 'error');
+            });
         }
+    }
 
-        function bindMessageActions() {
-            document.querySelectorAll('.edit-message-btn').forEach(button => {
-                button.removeEventListener('click', handleEditClick);
-                button.addEventListener('click', handleEditClick);
-            });
-            document.querySelectorAll('.delete-message-btn').forEach(button => {
-                button.removeEventListener('click', handleDeleteClick);
-                button.addEventListener('click', handleDeleteClick);
-            });
-            document.querySelectorAll('.delete-quick-reply-form').forEach(form => {
-                form.removeEventListener('submit', handleDeleteQuickReplyClick);
-                form.addEventListener('submit', handleDeleteQuickReplyClick);
-            });
-            document.querySelectorAll('.quick-reply-btn').forEach(button => {
-                button.removeEventListener('click', handleQuickReplyClick);
-                button.addEventListener('click', handleQuickReplyClick);
-            });
+    function handleDeleteQuickReplyClick(event) {
+        event.preventDefault();
+        const form = event.target;
+        const quickReplyId = form.dataset.quickReplyId;
+        if (!confirm('Удалить быстрый ответ?')) {
+            return;
         }
+        const formData = new FormData(form);
+        fetch('/delete_quick_reply', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Ошибка HTTP: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.status === 'ok') {
+                showNotification('Быстрый ответ удалён', 'success');
+            } else {
+                throw new Error(data.detail || 'Ошибка удаления быстрого ответа');
+            }
+        })
+        .catch(error => {
+            console.error('Ошибка удаления:', error);
+            showNotification(`Ошибка: ${error.message}`, 'error');
+            window.location.reload();
+        });
+    }
 
-        function handleEditClick() {
-            const messageId = this.dataset.messageId;
-            const text = this.dataset.text;
-            document.getElementById('edit-message-id').value = messageId;
-            document.getElementById('edit-message-text').value = text;
-            openModal('editMessageModal');
+    function handleQuickReplyClick() {
+        const text = this.dataset.text;
+        document.getElementById('message-input').value = text;
+    }
+
+    function sendMessage(form) {
+        const formData = new FormData(form);
+        const text = formData.get('text').trim();
+        const issueType = document.getElementById('issue-type-select').value;
+        formData.append('issue_type', issueType);
+        if (!text && !formData.get('file')) {
+            return;
         }
+        fetch('/send_message', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'ok') {
+                form.reset();
+                const messagesDiv = document.getElementById('messages');
+                messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
+            } else {
+                showNotification('Ошибка отправки сообщения: ' + data.message, 'error');
+            }
+        })
+        .catch(error => {
+            showNotification('Ошибка отправки сообщения', 'error');
+        });
+    }
 
-        function handleDeleteClick() {
-            const messageId = this.dataset.messageId;
-            const ticketId = this.dataset.ticketId;
-            if (confirm('Вы уверены, что хотите удалить это сообщение?')) {
+    function sendAdminMessage(form) {
+        const formData = new FormData(form);
+        const text = formData.get('text').trim();
+        if (!text) {
+            return;
+        }
+        fetch('/send_admin_message', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'ok') {
+                form.reset();
+                const adminMessagesDiv = document.getElementById('admin-messages');
+                adminMessagesDiv.scrollTo({ top: adminMessagesDiv.scrollHeight, behavior: 'smooth' });
+            } else {
+                showNotification('Ошибка отправки сообщения в админ-чат: ' + data.message, 'error');
+            }
+        })
+        .catch(error => {
+            showNotification('Ошибка отправки сообщения в админ-чат', 'error');
+        });
+    }
+
+    function fetchHistory() {
+        const fetchBtn = document.getElementById('fetch-history-btn');
+        fetchBtn.disabled = true;
+        fetchBtn.textContent = 'Загрузка...';
+
+        console.log('Current displayedTicketIds:', Array.from(displayedTicketIds));
+
+        const formData = new FormData();
+        formData.append('ticket_id', '{{ ticket_id }}');
+        formData.append('telegram_id', '{{ telegram_id }}');
+        formData.append('displayed_ticket_ids', Array.from(displayedTicketIds).join(','));
+
+        fetch('/fetch_telegram_history', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'no_more_history') {
+                showNotification('Больше истории нет', 'info');
+                fetchBtn.disabled = true;
+            } else if (data.status === 'ok') {
+                console.log(`История подтянута из тикета #${data.fetched_ticket_ids[0]}, сообщений: ${data.messages_count}`);
+                showNotification(`Подтянута история из тикета #${data.fetched_ticket_ids[0]}`, 'success');
+            } else {
+                showNotification('Ошибка подтягивания истории: ' + data.message, 'error');
+            }
+            fetchBtn.disabled = false;
+            fetchBtn.textContent = 'Подтянуть историю';
+        })
+        .catch(error => {
+            console.error('Ошибка подтягивания истории:', error);
+            showNotification('Не удалось подтянуть историю', 'error');
+            fetchBtn.disabled = false;
+            fetchBtn.textContent = 'Подтянуть историю';
+        });
+    }
+
+    document.getElementById('send-message-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        sendMessage(e.target);
+    });
+
+    document.getElementById('send-admin-message-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        sendAdminMessage(e.target);
+    });
+
+    document.getElementById('admin-message-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            const form = document.getElementById('send-admin-message-form');
+            sendAdminMessage(form);
+        }
+    });
+
+    document.getElementById('message-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            const form = document.getElementById('send-message-form');
+            sendMessage(form);
+        }
+    });
+
+    document.getElementById('close-ticket-btn').addEventListener('click', () => {
+        const formData = new FormData();
+        formData.append('ticket_id', '{{ ticket_id }}');
+        fetch('/close_ticket', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status !== 'ok') {
+                showNotification('Ошибка закрытия тикета: ' + data.message, 'error');
+            }
+        })
+        .catch(error => showNotification('Ошибка закрытия тикета', 'error'));
+    });
+
+    document.getElementById('edit-message-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        fetch('/edit_message', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'ok') {
+                closeModal('editMessageModal');
+            } else {
+                showNotification('Ошибка редактирования сообщения: ' + data.detail, 'error');
+            }
+        })
+        .catch(error => {
+            showNotification('Ошибка редактирования сообщения', 'error');
+        });
+    });
+
+    document.getElementById('issue-type-select').addEventListener('change', (e) => {
+        const formData = new FormData();
+        formData.append('ticket_id', '{{ ticket_id }}');
+        formData.append('issue_type', e.target.value);
+        fetch('/update_issue_type', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status !== 'ok') {
+                showNotification('Ошибка обновления типа тикета: ' + data.message, 'error');
+            }
+        })
+        .catch(error => showNotification('Ошибка обновления типа тикета', 'error'));
+    });
+
+    document.getElementById('assign-to-select').addEventListener('change', (e) => {
+        const formData = new FormData();
+        formData.append('ticket_id', '{{ ticket_id }}');
+        formData.append('assigned_to', e.target.value);
+        fetch('/assign_ticket', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status !== 'ok') {
+                showNotification('Ошибка назначения тикета: ' + data.message, 'error');
+            }
+        })
+        .catch(error => showNotification('Ошибка назначения тикета', 'error'));
+    });
+
+    function openModal(modalId) {
+        document.getElementById(modalId).style.display = 'block';
+    }
+
+    function closeModal(modalId) {
+        document.getElementById(modalId).style.display = 'none';
+    }
+
+    document.getElementById('mute-btn').addEventListener('click', () => openModal('muteModal'));
+    document.getElementById('ban-btn').addEventListener('click', () => openModal('banModal'));
+    document.getElementById('add-quick-reply-btn').addEventListener('click', () => openModal('addQuickReplyModal'));
+
+    document.getElementById('mute-form-modal').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        formData.append('ticket_id', '{{ ticket_id }}');
+        formData.append('telegram_id', '{{ telegram_id }}');
+        fetch('/mute_user', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'ok') {
+                showNotification('Пользователь замучен', 'success');
+                closeModal('muteModal');
+                location.reload();
+            } else {
+                showNotification('Ошибка: ' + data.message, 'error');
+            }
+        })
+        .catch(error => showNotification('Ошибка мута пользователя', 'error'));
+    });
+
+    document.getElementById('ban-form-modal').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        formData.append('ticket_id', '{{ ticket_id }}');
+        formData.append('telegram_id', '{{ telegram_id }}');
+        if (formData.get('permanent') === 'on') {
+            formData.delete('ban_duration');
+        }
+        fetch('/ban_user', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'ok') {
+                showNotification('Пользователь забанен', 'success');
+                closeModal('banModal');
+                location.reload();
+            } else {
+                showNotification('Ошибка: ' + data.message, 'error');
+            }
+        })
+        .catch(error => showNotification('Ошибка бана пользователя', 'error'));
+    });
+
+    document.getElementById('add-quick-reply-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        fetch('/add_quick_reply', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'ok') {
+                closeModal('addQuickReplyModal');
+                document.getElementById('add-quick-reply-form').reset();
+            } else {
+                showNotification('Ошибка добавления быстрого ответа: ' + data.detail, 'error');
+            }
+        })
+        .catch(error => {
+            showNotification('Ошибка добавления быстрого ответа', 'error');
+        });
+    });
+
+    {% if is_muted %}
+    document.getElementById('unmute-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        fetch('/unmute_user', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'ok') {
+                showNotification('Мут снят', 'success');
+                location.reload();
+            } else {
+                showNotification('Ошибка: ' + data.message, 'error');
+            }
+        })
+        .catch(error => showNotification('Ошибка снятия мута', 'error'));
+    });
+    {% endif %}
+
+    {% if is_banned %}
+    document.getElementById('unban-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        fetch('/unban_user', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'ok') {
+                showNotification('Бан снят', 'success');
+                location.reload();
+            } else {
+                showNotification('Ошибка: ' + data.message, 'error');
+            }
+        })
+        .catch(error => showNotification('Ошибка снятия бана', 'error'));
+    });
+    {% endif %}
+
+    function openImageModal(src) {
+        const modal = document.getElementById('imageModal');
+        const modalImage = document.getElementById('modalImage');
+        modalImage.src = src;
+        modal.classList.remove('hidden');
+    }
+
+    function closeImageModal() {
+        const modal = document.getElementById('imageModal');
+        modal.classList.add('hidden');
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeImageModal();
+        }
+    });
+
+    document.getElementById('message-input').addEventListener('paste', async (e) => {
+        e.preventDefault();
+        const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+        for (const item of items) {
+            if (item.type.startsWith('image/')) {
+                const file = item.getAsFile();
                 const formData = new FormData();
-                formData.append('message_id', messageId);
-                formData.append('ticket_id', ticketId);
-                fetch('/delete_message', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status !== 'ok') {
-                        throw new Error(data.detail || 'Ошибка удаления сообщения');
+                formData.append('ticket_id', '{{ ticket_id }}');
+                formData.append('telegram_id', '{{ telegram_id }}');
+                const inputText = document.getElementById('message-input').value;
+                formData.append('text', inputText);
+                formData.append('file', file, `screenshot-${Date.now()}.png`);
+                formData.append('issue_type', document.getElementById('issue-type-select').value);
+                try {
+                    const response = await fetch('/send_message', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await response.json();
+                    if (data.status === 'ok') {
+                        document.getElementById('send-message-form').reset();
+                    } else {
+                        showNotification('Не удалось отправить изображение: ' + data.message, 'error');
                     }
-                })
-                .catch(error => {
-                    showNotification(error.message, 'error');
-                });
+                } catch (error) {
+                    showNotification('Не удалось отправить изображение', 'error');
+                }
+                break;
             }
         }
+    });
 
-        function handleDeleteQuickReplyClick(event) {
-            event.preventDefault();
-            const form = event.target;
-            const quickReplyId = form.dataset.quickReplyId;
-            if (!confirm('Удалить быстрый ответ?')) {
-                return;
-            }
-            const formData = new FormData(form);
-            fetch('/delete_quick_reply', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`Ошибка HTTP: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                if (data.status === 'ok') {
-                    // Removal handled by socket event
-                    showNotification('Быстрый ответ удалён', 'success');
-                } else {
-                    throw new Error(data.detail || 'Ошибка удаления быстрого ответа');
-                }
-            })
-            .catch(error => {
-                console.error('Ошибка удаления:', error);
-                showNotification(`Ошибка: ${error.message}`, 'error');
-                window.location.reload(); // Fallback to page reload
-            });
-        }
+    document.addEventListener('DOMContentLoaded', function () {
+        const closeTicketButton = document.querySelector('button[data-action="close-ticket"]');
+        if (closeTicketButton) {
+            closeTicketButton.addEventListener('click', async function () {
+                const ticketId = this.dataset.ticketId;
+                const errorDiv = document.createElement('div');
+                errorDiv.style.color = 'red';
+                errorDiv.style.display = 'none';
+                this.parentElement.appendChild(errorDiv);
 
-        function handleQuickReplyClick() {
-            const text = this.dataset.text;
-            document.getElementById('message-input').value = text;
-        }
-
-        function sendMessage(form) {
-            const formData = new FormData(form);
-            const text = formData.get('text').trim();
-            const issueType = document.getElementById('issue-type-select').value;
-            formData.append('issue_type', issueType);
-            if (!text && !formData.get('file')) {
-                return;
-            }
-            fetch('/send_message', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    form.reset();
-                    const messagesDiv = document.getElementById('messages');
-                    messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
-                } else {
-                    showNotification('Ошибка отправки сообщения: ' + data.message, 'error');
-                }
-            })
-            .catch(error => {
-                showNotification('Ошибка отправки сообщения', 'error');
-            });
-        }
-
-        function sendAdminMessage(form) {
-            const formData = new FormData(form);
-            const text = formData.get('text').trim();
-            if (!text) {
-                return;
-            }
-            fetch('/send_admin_message', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    form.reset();
-                    const adminMessagesDiv = document.getElementById('admin-messages');
-                    adminMessagesDiv.scrollTo({ top: adminMessagesDiv.scrollHeight, behavior: 'smooth' });
-                } else {
-                    showNotification('Ошибка отправки сообщения в админ-чат: ' + data.message, 'error');
-                }
-            })
-            .catch(error => {
-                showNotification('Ошибка отправки сообщения в админ-чат', 'error');
-            });
-        }
-
-        document.getElementById('send-message-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            sendMessage(e.target);
-        });
-
-        document.getElementById('send-admin-message-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            sendAdminMessage(e.target);
-        });
-
-        document.getElementById('admin-message-input').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                const form = document.getElementById('send-admin-message-form');
-                sendAdminMessage(form);
-            }
-        });
-
-        document.getElementById('message-input').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                const form = document.getElementById('send-message-form');
-                sendMessage(form);
-            }
-        });
-
-        document.getElementById('close-ticket-btn').addEventListener('click', () => {
-            const formData = new FormData();
-            formData.append('ticket_id', '{{ ticket_id }}');
-            fetch('/close_ticket', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status !== 'ok') {
-                    showNotification('Ошибка закрытия тикета: ' + data.message, 'error');
-                }
-            })
-            .catch(error => showNotification('Ошибка закрытия тикета', 'error'));
-        });
-
-        document.getElementById('edit-message-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            fetch('/edit_message', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    closeModal('editMessageModal');
-                } else {
-                    showNotification('Ошибка редактирования сообщения: ' + data.detail, 'error');
-                }
-            })
-            .catch(error => {
-                showNotification('Ошибка редактирования сообщения', 'error');
-            });
-        });
-
-        document.getElementById('fetch-history-btn').addEventListener('click', () => {
-            const formData = new FormData();
-            formData.append('ticket_id', '{{ ticket_id }}');
-            formData.append('telegram_id', '{{ telegram_id }}');
-            fetch('/fetch_telegram_history', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    console.log(`История подтянута из тикета #${data.fetched_ticket_id}`);
-                } else if (data.status !== 'no_more_history') {
-                    showNotification('Ошибка подтягивания истории: ' + data.message, 'error');
-                }
-            })
-            .catch(error => {
-                showNotification('Не удалось подтянуть историю', 'error');
-            });
-        });
-
-        document.getElementById('issue-type-select').addEventListener('change', (e) => {
-            const formData = new FormData();
-            formData.append('ticket_id', '{{ ticket_id }}');
-            formData.append('issue_type', e.target.value);
-            fetch('/update_issue_type', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status !== 'ok') {
-                    showNotification('Ошибка обновления типа тикета: ' + data.message, 'error');
-                }
-            })
-            .catch(error => showNotification('Ошибка обновления типа тикета', 'error'));
-        });
-
-        document.getElementById('assign-to-select').addEventListener('change', (e) => {
-            const formData = new FormData();
-            formData.append('ticket_id', '{{ ticket_id }}');
-            formData.append('assigned_to', e.target.value);
-            fetch('/assign_ticket', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status !== 'ok') {
-                    showNotification('Ошибка назначения тикета: ' + data.message, 'error');
-                }
-            })
-            .catch(error => showNotification('Ошибка назначения тикета', 'error'));
-        });
-
-        function openModal(modalId) {
-            document.getElementById(modalId).style.display = 'block';
-        }
-
-        function closeModal(modalId) {
-            document.getElementById(modalId).style.display = 'none';
-        }
-
-        document.getElementById('mute-btn').addEventListener('click', () => openModal('muteModal'));
-        document.getElementById('ban-btn').addEventListener('click', () => openModal('banModal'));
-        document.getElementById('add-quick-reply-btn').addEventListener('click', () => openModal('addQuickReplyModal'));
-
-        document.getElementById('mute-form-modal').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            formData.append('ticket_id', '{{ ticket_id }}');
-            formData.append('telegram_id', '{{ telegram_id }}');
-            fetch('/mute_user', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    showNotification('Пользователь замучен', 'success');
-                    closeModal('muteModal');
-                    location.reload();
-                } else {
-                    showNotification('Ошибка: ' + data.message, 'error');
-                }
-            })
-            .catch(error => showNotification('Ошибка мута пользователя', 'error'));
-        });
-
-        document.getElementById('ban-form-modal').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            formData.append('ticket_id', '{{ ticket_id }}');
-            formData.append('telegram_id', '{{ telegram_id }}');
-            if (formData.get('permanent') === 'on') {
-                formData.delete('ban_duration');
-            }
-            fetch('/ban_user', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    showNotification('Пользователь забанен', 'success');
-                    closeModal('banModal');
-                    location.reload();
-                } else {
-                    showNotification('Ошибка: ' + data.message, 'error');
-                }
-            })
-            .catch(error => showNotification('Ошибка бана пользователя', 'error'));
-        });
-
-        document.getElementById('add-quick-reply-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            fetch('/add_quick_reply', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    closeModal('addQuickReplyModal');
-                    document.getElementById('add-quick-reply-form').reset();
-                } else {
-                    showNotification('Ошибка добавления быстрого ответа: ' + data.detail, 'error');
-                }
-            })
-            .catch(error => {
-                showNotification('Ошибка добавления быстрого ответа', 'error');
-            });
-        });
-
-        {% if is_muted %}
-        document.getElementById('unmute-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            fetch('/unmute_user', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    showNotification('Мут снят', 'success');
-                    location.reload();
-                } else {
-                    showNotification('Ошибка: ' + data.message, 'error');
-                }
-            })
-            .catch(error => showNotification('Ошибка снятия мута', 'error'));
-        });
-        {% endif %}
-
-        {% if is_banned %}
-        document.getElementById('unban-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            fetch('/unban_user', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    showNotification('Бан снят', 'success');
-                    location.reload();
-                } else {
-                    showNotification('Ошибка: ' + data.message, 'error');
-                }
-            })
-            .catch(error => showNotification('Ошибка снятия бана', 'error'));
-        });
-        {% endif %}
-
-        function openImageModal(src) {
-            const modal = document.getElementById('imageModal');
-            const modalImage = document.getElementById('modalImage');
-            modalImage.src = src;
-            modal.classList.remove('hidden');
-        }
-
-        function closeImageModal() {
-            const modal = document.getElementById('imageModal');
-            modal.classList.add('hidden');
-        }
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                closeImageModal();
-            }
-        });
-
-        document.getElementById('message-input').addEventListener('paste', async (e) => {
-            e.preventDefault();
-            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
-            for (const item of items) {
-                if (item.type.startsWith('image/')) {
-                    const file = item.getAsFile();
-                    const formData = new FormData();
-                    formData.append('ticket_id', '{{ ticket_id }}');
-                    formData.append('telegram_id', '{{ telegram_id }}');
-                    const inputText = document.getElementById('message-input').value;
-                    formData.append('text', inputText);
-                    formData.append('file', file, `screenshot-${Date.now()}.png`);
-                    formData.append('issue_type', document.getElementById('issue-type-select').value);
-                    try {
-                        const response = await fetch('/send_message', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        const data = await response.json();
-                        if (data.status === 'ok') {
-                            document.getElementById('send-message-form').reset();
-                        } else {
-                            showNotification('Не удалось отправить изображение: ' + data.message, 'error');
-                        }
-                    } catch (error) {
-                        showNotification('Не удалось отправить изображение', 'error');
-                    }
-                    break;
-                }
-            }
-        });
-
-        document.addEventListener('DOMContentLoaded', function () {
-            const closeTicketButton = document.querySelector('button[data-action="close-ticket"]');
-            if (closeTicketButton) {
-                closeTicketButton.addEventListener('click', async function () {
-                    const ticketId = this.dataset.ticketId;
-                    const errorDiv = document.createElement('div');
-                    errorDiv.style.color = 'red';
-                    errorDiv.style.display = 'none';
-                    this.parentElement.appendChild(errorDiv);
-
-                    try {
-                        const response = await fetch('/close_ticket', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                            body: `ticket_id=${ticketId}`
-                        });
-                        const data = await response.json();
-                        if (data.status === 'ok') {
-                            window.location.href = '/'; // Redirect to homepage
-                        } else {
-                            errorDiv.textContent = 'Ошибка при закрытии тикета';
-                            errorDiv.style.display = 'block';
-                            setTimeout(() => { errorDiv.style.display = 'none'; }, 3000);
-                        }
-                    } catch (error) {
+                try {
+                    const response = await fetch('/close_ticket', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: `ticket_id=${ticketId}`
+                    });
+                    const data = await response.json();
+                    if (data.status === 'ok') {
+                        window.location.href = '/';
+                    } else {
                         errorDiv.textContent = 'Ошибка при закрытии тикета';
                         errorDiv.style.display = 'block';
                         setTimeout(() => { errorDiv.style.display = 'none'; }, 3000);
-                        console.error('Error closing ticket:', error);
                     }
-                });
-            }
-        });
+                } catch (error) {
+                    errorDiv.textContent = 'Ошибка при закрытии тикета';
+                    errorDiv.style.display = 'block';
+                    setTimeout(() => { errorDiv.style.display = 'none'; }, 3000);
+                    console.error('Error closing ticket:', error);
+                }
+            });
+        }
+    });
 
-        window.onload = () => {
-            const messagesDiv = document.getElementById('messages');
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            const adminMessagesDiv = document.getElementById('admin-messages');
-            adminMessagesDiv.scrollTop = adminMessagesDiv.scrollHeight;
-            bindMessageActions();
-        };
+    window.addEventListener('load', () => {
+        const messagesDiv = document.getElementById('messages');
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        const adminMessagesDiv = document.getElementById('admin-messages');
+        adminMessagesDiv.scrollTop = adminMessagesDiv.scrollHeight;
+        bindMessageActions();
+        displayedTicketIds = new Set([{{ ticket_id }}]);
+        renderedMessageIds.clear(); // Сбрасываем при загрузке страницы
+    });
 
-        const textarea = document.getElementById('message-input');
-        textarea.addEventListener('input', () => {
-            textarea.style.height = 'auto';
-            textarea.style.height = `${Math.min(textarea.scrollHeight, 100)}px`;
-        });
+    const textarea = document.getElementById('message-input');
+    textarea.addEventListener('input', () => {
+        textarea.style.height = 'auto';
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 100)}px`;
+    });
 
-        const adminTextarea = document.getElementById('admin-message-input');
-        adminTextarea.addEventListener('input', () => {
-            adminTextarea.style.height = 'auto';
-            adminTextarea.style.height = `${Math.min(adminTextarea.scrollHeight, 100)}px`;
-        });
+    const adminTextarea = document.getElementById('admin-message-input');
+    adminTextarea.addEventListener('input', () => {
+        adminTextarea.style.height = 'auto';
+        adminTextarea.style.height = `${Math.min(adminTextarea.scrollHeight, 100)}px`;
+    });
 
-        document.getElementById('attach-file-btn').addEventListener('click', () => {
-            document.getElementById('file-input').click();
-        });
-    </script>
+    document.getElementById('attach-file-btn').addEventListener('click', () => {
+        document.getElementById('file-input').click();
+    });
+
+    document.getElementById('fetch-history-btn').addEventListener('click', () => {
+        fetchHistory();
+    });
+</script>
 </body>
 </html>
