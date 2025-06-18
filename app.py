@@ -17,7 +17,7 @@ import secrets
 import hashlib
 import hmac
 from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, User
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -166,6 +166,11 @@ async def telegram_auth(
     cursor.execute(
         "INSERT INTO sessions (session_token, telegram_id, expires_at) VALUES (?, ?, ?)",
         (session_token, telegram_id, expires_at)
+    )
+    full_name = " ".join(filter(None, [first_name, last_name])).strip() or f"User {telegram_id}"
+    cursor.execute(
+        "UPDATE employees SET full_name = ? WHERE telegram_id = ?",
+        (full_name, telegram_id)
     )
     conn.commit()
     conn.close()
@@ -1162,16 +1167,36 @@ async def get_employee_ratings(telegram_id: int, employee: dict = Depends(get_cu
 async def admin_employees(request: Request, employee: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT telegram_id, login, is_admin FROM employees")
+    cursor.execute("SELECT telegram_id, login, is_admin, full_name FROM employees")
     employees = [
         {
             "telegram_id": row["telegram_id"],
             "login": row["login"],
-            "is_admin": row["is_admin"]
+            "is_admin": row["is_admin"],
+            "full_name": row["full_name"]
         }
         for row in cursor.fetchall()
     ]
     conn.close()
+
+    async def update_full_name(emp):
+        try:
+            tg_user: User = await bot.get_chat(emp["telegram_id"])
+            new_full_name = " ".join(filter(None, [tg_user.first_name, tg_user.last_name])).strip() or f"User {emp['telegram_id']}"
+            if new_full_name != emp["full_name"]:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE employees SET full_name = ? WHERE telegram_id = ?",
+                    (new_full_name, emp["telegram_id"])
+                )
+                conn.commit()
+                conn.close()
+                emp["full_name"] = new_full_name
+        except Exception as e:
+            logging.error(f"Ошибка обновления full_name для telegram_id={emp['telegram_id']}: {e}")
+
+    await asyncio.gather(*[update_full_name(emp) for emp in employees])
     return templates.TemplateResponse("admin_employees.html", {"request": request, "employees": employees, "employee": employee})
 
 @app.post("/admin/employees/add")

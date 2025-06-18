@@ -28,6 +28,7 @@
         <thead>
             <tr class="bg-gray-200">
                 <th class="p-2">Telegram ID</th>
+                <th class="p-2">Имя</th>
                 <th class="p-2">Логин</th>
                 <th class="p-2">Техподдержка</th>
                 <th class="p-2">Действия</th>
@@ -37,6 +38,7 @@
             {% for emp in employees %}
             <tr class="border-t">
                 <td class="p-2">{{ emp.telegram_id }}</td>
+                <td class="p-2">{{ emp.full_name }}</td>
                 <td class="p-2">{{ emp.login }}</td>
                 <td class="p-2">{{ 'Да' if emp.is_admin else 'Нет' }}</td>
                 <td class="p-2">

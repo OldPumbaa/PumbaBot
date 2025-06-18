@@ -50,7 +50,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             login TEXT UNIQUE,
             telegram_id INTEGER UNIQUE,
-            is_admin BOOLEAN DEFAULT FALSE
+            is_admin BOOLEAN DEFAULT FALSE,
+            full_name TEXT
         )
     """)
     cursor.execute("""
@@ -274,6 +275,7 @@ async def start_command(message: Message, state: FSMContext):
 async def process_registration_login(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     login = message.text.strip()
+    full_name = " ".join(filter(None, [message.from_user.first_name, message.from_user.last_name])).strip() or f"User {telegram_id}"
 
     # Validate login: must be an email (contains @) and no # allowed for regular users
     if not login or len(login) > 50:
@@ -290,8 +292,8 @@ async def process_registration_login(message: Message, state: FSMContext):
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "INSERT INTO employees (telegram_id, login, is_admin) VALUES (?, ?, ?)",
-            (telegram_id, login, False)
+            "INSERT INTO employees (telegram_id, login, is_admin, full_name) VALUES (?, ?, ?, ?)",
+            (telegram_id, login, False, full_name)
         )
         conn.commit()
         await message.reply(f"Регистрация завершена! Добро пожаловать, {login}! Вы можете создавать тикеты, отправив сообщение или файл.")
@@ -436,12 +438,11 @@ async def handle_voice(message: Message):
 
 @dp.message(F.text)
 async def handle_text_message(message: Message, state: FSMContext):
-    # Skip if user is in registration state
+    telegram_id = message.from_user.id
     current_state = await state.get_state()
     if current_state == RegistrationStates.waiting_for_login.state:
         return  # Let the registration handler process this message
 
-    telegram_id = message.from_user.id
     if is_banned(telegram_id):
         return
     if is_muted(telegram_id):
@@ -452,79 +453,94 @@ async def handle_text_message(message: Message, state: FSMContext):
     cursor = conn.cursor()
     cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
     employee = cursor.fetchone()
-    conn.close()
 
     if not employee:
         await message.reply("Вы не зарегистрированы. Используйте команду /start для регистрации.")
+        conn.close()
         return
 
     login = employee[0]
     astana_tz = pytz.timezone('Asia/Almaty')
-    timestamp = message.date.astimezone(astana_tz).isoformat()
+    is_edited = message.edit_date is not None
+    timestamp = message.edit_date.astimezone(astana_tz).isoformat() if is_edited else message.date.astimezone(astana_tz).isoformat()
+    text = f"{message.text} (ред.)" if is_edited else message.text
 
-    conn = sqlite3.connect("support.db", timeout=10)
-    cursor = conn.cursor()
     cursor.execute(
-        "SELECT ticket_id FROM tickets WHERE telegram_id = ? AND status = 'open'",
-        (telegram_id,)
+        "SELECT ticket_id, message_id FROM messages WHERE telegram_id = ? AND telegram_message_id = ?",
+        (telegram_id, message.message_id)
     )
-    ticket = cursor.fetchone()
-    is_new_ticket = not ticket
+    message_data = cursor.fetchone()
+    is_new_message = not message_data
 
-    if is_new_ticket:
+    if is_new_message:
         cursor.execute(
-            "INSERT INTO tickets (telegram_id, status, created_at, issue_type) VALUES (?, ?, ?, ?)",
-            (telegram_id, "open", datetime.now(astana_tz).isoformat(), None)
+            "SELECT ticket_id FROM tickets WHERE telegram_id = ? AND status = 'open'",
+            (telegram_id,)
         )
-        ticket_id = cursor.lastrowid
-    else:
-        ticket_id = ticket[0]
+        ticket = cursor.fetchone()
+        is_new_ticket = not ticket
 
-    cursor.execute(
-        """
-        SELECT message_id FROM messages 
-        WHERE ticket_id = ? AND telegram_id = ? AND text = ? AND timestamp = ?
-        """,
-        (ticket_id, telegram_id, message.text, timestamp)
-    )
-    if not cursor.fetchone():
+        if is_new_ticket:
+            cursor.execute(
+                "INSERT INTO tickets (telegram_id, status, created_at, issue_type) VALUES (?, ?, ?, ?)",
+                (telegram_id, "open", datetime.now(astana_tz).isoformat(), None)
+            )
+            ticket_id = cursor.lastrowid
+        else:
+            ticket_id = ticket[0]
+
         cursor.execute(
             "INSERT INTO messages (ticket_id, telegram_id, text, is_from_bot, timestamp, telegram_message_id) VALUES (?, ?, ?, ?, ?, ?)",
-            (ticket_id, telegram_id, message.text, 0, timestamp, message.message_id)
+            (ticket_id, telegram_id, text, 0, timestamp, message.message_id)
         )
         message_id = cursor.lastrowid
         conn.commit()
 
-        logging.debug(f"Отправка события new_message для ticket_id={ticket_id}, text={message.text}")
-        await sio.emit("new_message", {
+        logging.debug(f"Отправка события {'new_message' if not is_edited else 'message_edited'} для ticket_id={ticket_id}, text={text}")
+        await sio.emit("new_message" if not is_edited else "message_edited", {
             "ticket_id": ticket_id,
             "telegram_id": telegram_id,
-            "text": message.text,
+            "text": text,
             "is_from_bot": False,
             "timestamp": timestamp,
             "login": login,
             "message_id": message_id
         })
 
-    conn.close()
-
-    logging.debug(f"Создан/обновлён тикет #{ticket_id} для telegram_id={telegram_id}, login={login}")
-
-    if is_new_ticket:
-        logging.debug(f"Отправка события update_tickets для нового ticket_id={ticket_id}")
-        await sio.emit("update_tickets", {
+        if is_new_ticket:
+            logging.debug(f"Отправка события update_tickets для нового ticket_id={ticket_id}")
+            await sio.emit("update_tickets", {
+                "ticket_id": ticket_id,
+                "telegram_id": telegram_id,
+                "login": login,
+                "last_message": text,
+                "last_message_timestamp": timestamp,
+                "issue_type": None
+            })
+            await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
+            reply_text = "Обращение принято. При необходимости прикрепите скриншот или файл с логами."
+            if not is_working_hours():
+                reply_text += "\n\nОбратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени."
+            await message.reply(reply_text)
+    else:
+        ticket_id, message_id = message_data
+        cursor.execute(
+            "UPDATE messages SET text = ?, timestamp = ? WHERE message_id = ?",
+            (text, timestamp, message_id)
+        )
+        conn.commit()
+        logging.debug(f"Обновлено отредактированное сообщение message_id={message_id} для ticket_id={ticket_id}")
+        await sio.emit("message_edited", {
             "ticket_id": ticket_id,
+            "message_id": message_id,
             "telegram_id": telegram_id,
-            "login": login,
-            "last_message": message.text,
-            "last_message_timestamp": timestamp,
-            "issue_type": None
+            "text": text,
+            "is_from_bot": False,
+            "timestamp": timestamp,
+            "login": login
         })
-        await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
-        reply_text = "Обращение принято. При необходимости прикрепите скриншот или файл с логами."
-        if not is_working_hours():
-            reply_text += "\n\nОбратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени."
-        await message.reply(reply_text)
+
+    conn.close()
 
 @dp.callback_query(lambda c: c.data.startswith("minichat_"))
 async def handle_minichat(callback: CallbackQuery):
