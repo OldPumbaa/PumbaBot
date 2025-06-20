@@ -44,7 +44,7 @@ venv\Scripts\activate     # Windows
 pip install -r requirements.txt
 ```
 4. Настройте переменные окружения:
-* Скопируйте .env.example в .env:
+* Скопируйте env.example в .env:
 ```bash
 cp .env.example .env
 ```
