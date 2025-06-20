@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Form, HTTPException, Depends, File, UploadFile, Query
+from fastapi import FastAPI, Request, Form, HTTPException, Depends, File, UploadFile, Query, Body
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -117,6 +117,26 @@ async def get_current_user(request: Request):
     logging.debug(f"Авторизован пользователь: telegram_id={telegram_id}, login={employee['login']}, is_admin={employee['is_admin']}")
     return {"telegram_id": telegram_id, "login": employee['login'], "is_admin": employee['is_admin']}
 
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request, employee: dict = Depends(get_current_user)):
+    logging.debug("Запрос к странице настроек /settings")
+    settings = {
+        "registration_greeting": get_setting("registration_greeting"),
+        "new_ticket_response": get_setting("new_ticket_response"),
+        "non_working_hours_message": get_setting("non_working_hours_message"),
+        "holiday_message": get_setting("holiday_message"),
+        "working_hours_start": get_setting("working_hours_start"),
+        "working_hours_end": get_setting("working_hours_end"),
+        "weekend_days": [int(day) for day in get_setting("weekend_days", "0,6").split(",")],
+        "is_holiday": get_setting("is_holiday", "0")
+    }
+    return templates.TemplateResponse("settings.html", {
+        "request": request,
+        "employee": employee,
+        "settings": settings,
+        "BASE_URL": BASE_URL
+    })
+
 @app.get("/telegram-auth")
 async def telegram_auth(
     id: str = Query(...),
@@ -186,6 +206,22 @@ async def telegram_auth(
     )
     logging.debug(f"Установлен session_token в куки, редирект на /")
     return response
+
+def get_setting(key: str, default: str = None) -> str:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    result = cursor.fetchone()
+    conn.close()
+    return result["value"] if result else default
+
+def update_setting(key: str, value: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+    conn.close()
+    logging.debug(f"Настройка {key} обновлена: {value}")
 
 def get_db_connection():
     conn = sqlite3.connect("support.db", timeout=10)
@@ -261,10 +297,12 @@ async def quickview(
 
     cursor.execute(
         """
-        SELECT m.message_id, m.ticket_id, m.telegram_id, m.text, m.is_from_bot, m.timestamp, e.login,
-               a.file_path, a.file_name, a.file_type
+        SELECT m.message_id, m.ticket_id, m.telegram_id, m.text, m.is_from_bot, m.timestamp,
+            CASE WHEN m.is_from_bot THEN COALESCE(e2.login, 'Техподдержка') ELSE e.login END AS login,
+            a.file_path, a.file_name, a.file_type
         FROM messages m
         JOIN employees e ON m.telegram_id = e.telegram_id
+        LEFT JOIN employees e2 ON m.employee_telegram_id = e2.telegram_id
         LEFT JOIN attachments a ON m.message_id = a.message_id
         WHERE m.ticket_id = ?
         ORDER BY m.timestamp
@@ -342,13 +380,13 @@ async def index(request: Request, employee: dict = Depends(get_current_user)):
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT t.ticket_id, t.telegram_id, e.login, 
-                       m.text AS last_message, m.timestamp AS last_message_timestamp,
-                       a.file_path, a.file_name, a.file_type,
-                       t.issue_type, t.assigned_to, e2.login AS assigned_login
+                    m.text AS last_message, m.timestamp AS last_message_timestamp,
+                    a.file_path, a.file_name, a.file_type,
+                    t.issue_type, t.assigned_to, e2.login AS assigned_login
                 FROM tickets t 
                 JOIN employees e ON t.telegram_id = e.telegram_id 
                 LEFT JOIN (
-                    SELECT ticket_id, text, timestamp, message_id
+                    SELECT ticket_id, text, timestamp, message_id, is_from_bot, employee_telegram_id
                     FROM messages
                     WHERE (ticket_id, timestamp) IN (
                         SELECT ticket_id, MAX(timestamp)
@@ -356,6 +394,7 @@ async def index(request: Request, employee: dict = Depends(get_current_user)):
                         GROUP BY ticket_id
                     )
                 ) m ON t.ticket_id = m.ticket_id
+                LEFT JOIN employees e3 ON m.employee_telegram_id = e3.telegram_id
                 LEFT JOIN attachments a ON m.message_id = a.message_id
                 LEFT JOIN employees e2 ON t.assigned_to = e2.telegram_id
                 WHERE t.status = 'open'
@@ -376,7 +415,106 @@ async def index(request: Request, employee: dict = Depends(get_current_user)):
                 }
                 for row in cursor.fetchall()
             ]
-    return templates.TemplateResponse("index.html", {"request": request, "tickets": tickets, "employee": employee})
+        settings = {
+        "registration_greeting": get_setting("registration_greeting"),
+        "new_ticket_response": get_setting("new_ticket_response"),
+        "non_working_hours_message": get_setting("non_working_hours_message"),
+        "holiday_message": get_setting("holiday_message"),
+        "working_hours_start": get_setting("working_hours_start"),
+        "working_hours_end": get_setting("working_hours_end"),
+        "weekend_days": [int(day) for day in get_setting("weekend_days", "0,6").split(",")],
+        "is_holiday": get_setting("is_holiday", "0")
+        }
+        return templates.TemplateResponse("index.html", {
+            "request": request,
+            "tickets": tickets,
+            "employee": employee,
+            "settings": settings,
+            "BASE_URL": BASE_URL
+        })
+
+@app.post("/save_settings")
+async def save_settings(
+    request: Request,
+    registration_greeting: str = Form(...),
+    new_ticket_response: str = Form(...),
+    non_working_hours_message: str = Form(...),
+    holiday_message: str = Form(...),
+    working_hours_start: str = Form(...),
+    working_hours_end: str = Form(...),
+    weekend_days: list = Form(None),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    try:
+        update_setting("registration_greeting", registration_greeting)
+        update_setting("new_ticket_response", new_ticket_response)
+        update_setting("non_working_hours_message", non_working_hours_message)
+        update_setting("holiday_message", holiday_message)
+        update_setting("working_hours_start", working_hours_start)
+        update_setting("working_hours_end", working_hours_end)
+        update_setting("weekend_days", ",".join(weekend_days or ["0", "6"]))
+        logging.debug("Настройки сохранены")
+        return RedirectResponse(url="/", status_code=303)
+    except Exception as e:
+        logging.error(f"Ошибка при сохранении настроек: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/reset_settings")
+async def reset_settings(request: Request, employee: dict = Depends(get_current_user)):
+    logging.debug(f"Получен запрос на /reset_settings от telegram_id={employee['telegram_id']}")
+    if not employee["is_admin"]:
+        logging.error(f"Пользователь telegram_id={employee['telegram_id']} не является администратором")
+        raise HTTPException(status_code=403, detail="Not authorized")
+    try:
+        default_settings = [
+            ('registration_greeting', 'Вы можете создавать обращения, отправив сообщение или файл.'),
+            ('new_ticket_response', 'Обращение принято. При необходимости прикрепите скриншот или файл с логами.'),
+            ('non_working_hours_message', 'Обратите внимание: сейчас нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.'),
+            ('holiday_message', 'Сегодня праздничный день, поэтому ответ может занять больше времени.'),
+            ('working_hours_start', '12:00'),
+            ('working_hours_end', '23:59'),
+            ('weekend_days', '5,6'),
+            ('is_holiday', '0')
+        ]
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        for key, value in default_settings:
+            try:
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+                logging.debug(f"Сброшена настройка {key}: {value}")
+            except Exception as e:
+                logging.error(f"Ошибка при сбросе настройки {key}: {e}")
+                raise
+        conn.commit()
+        conn.close()
+        logging.debug("Настройки сброшены до значений по умолчанию")
+        return RedirectResponse(url="/settings", status_code=303)
+    except Exception as e:
+        logging.error(f"Общая ошибка при сбросе настроек: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/update_holiday")
+async def update_holiday(
+    request: Request,
+    data: dict = Body(...),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    try:
+        is_holiday = data.get("is_holiday")
+        if is_holiday not in ["0", "1"]:
+            raise HTTPException(status_code=400, detail="Invalid is_holiday value")
+        update_setting("is_holiday", is_holiday)
+        logging.debug(f"Статус праздника обновлен: {is_holiday}")
+        return {"status": "ok"}
+    except Exception as e:
+        logging.error(f"Ошибка при обновлении статуса праздника: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/ticket/{ticket_id}", response_class=HTMLResponse)
 async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_current_user)):
@@ -404,10 +542,12 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
 
     cursor.execute(
         """
-        SELECT m.message_id, m.ticket_id, m.telegram_id, m.text, m.is_from_bot, m.timestamp, e.login,
-               a.file_path, a.file_name, a.file_type
+        SELECT m.message_id, m.ticket_id, m.telegram_id, m.text, m.is_from_bot, m.timestamp,
+            CASE WHEN m.is_from_bot THEN COALESCE(e2.login, 'Техподдержка') ELSE e.login END AS login,
+            a.file_path, a.file_name, a.file_type
         FROM messages m
         JOIN employees e ON m.telegram_id = e.telegram_id
+        LEFT JOIN employees e2 ON m.employee_telegram_id = e2.telegram_id
         LEFT JOIN attachments a ON m.message_id = a.message_id
         WHERE m.ticket_id = ?
         ORDER BY m.timestamp
@@ -506,7 +646,8 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
             "mute_end_time": mute_end_time,
             "is_banned": is_banned,
             "ban_end_time": ban_end_time,
-            "quick_replies": quick_replies
+            "quick_replies": quick_replies,
+            "BASE_URL": BASE_URL
         }
     )
 
@@ -577,6 +718,57 @@ async def delete_quick_reply(
         logging.error(f"Ошибка при удалении быстрого ответа: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/admin/employees/send_message")
+async def send_employee_message(
+    request: Request,
+    telegram_id: int = Form(...),
+    text: str = Form(...),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    try:
+        await bot.send_message(chat_id=telegram_id, text=text)
+        logging.debug(f"Сообщение отправлено в ЛС сотруднику {telegram_id}: {text}")
+        return {"status": "ok"}
+    except Exception as e:
+        logging.error(f"Ошибка отправки сообщения в ЛС {telegram_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/admin/employees/toggle_admin")
+async def toggle_admin_status(
+    request: Request,
+    telegram_id: int = Form(...),
+    employee: dict = Depends(get_current_user)
+):
+    if not employee["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT is_admin FROM employees WHERE telegram_id = ?", (telegram_id,))
+        current_status = cursor.fetchone()
+        if not current_status:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Employee not found")
+        
+        new_status = not current_status["is_admin"]
+        cursor.execute("UPDATE employees SET is_admin = ? WHERE telegram_id = ?", (new_status, telegram_id))
+        conn.commit()
+        conn.close()
+        
+        await sio.emit("employee_updated", {
+            "telegram_id": telegram_id,
+            "is_admin": new_status
+        })
+        logging.debug(f"Статус техподдержки для {telegram_id} изменён на {new_status}")
+        return {"status": "ok", "is_admin": new_status}
+    except Exception as e:
+        logging.error(f"Ошибка при изменении статуса техподдержки для {telegram_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/send_message")
 async def send_message(
     request: Request,
@@ -606,8 +798,8 @@ async def send_message(
             db_text = f"[Файл] {file.filename}" if not text else text
         
         cursor.execute(
-            "INSERT INTO messages (ticket_id, telegram_id, text, is_from_bot, timestamp) VALUES (?, ?, ?, ?, ?)",
-            (ticket_id, telegram_id, db_text, 1, timestamp)
+            "INSERT INTO messages (ticket_id, telegram_id, employee_telegram_id, text, is_from_bot, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            (ticket_id, telegram_id, employee["telegram_id"], db_text, 1, timestamp)
         )
         message_id = cursor.lastrowid
 
@@ -964,9 +1156,12 @@ async def assign_ticket_endpoint(
 
         cursor.execute(
             """
-            SELECT m.text, m.timestamp, e.login, a.file_name
+            SELECT m.text, m.timestamp, 
+                CASE WHEN m.is_from_bot THEN COALESCE(e2.login, 'Техподдержка') ELSE e.login END AS login,
+                a.file_name
             FROM messages m
             JOIN employees e ON m.telegram_id = e.telegram_id
+            LEFT JOIN employees e2 ON m.employee_telegram_id = e2.telegram_id
             LEFT JOIN attachments a ON m.message_id = a.message_id
             WHERE m.ticket_id = ?
             ORDER BY m.timestamp DESC
@@ -1101,10 +1296,12 @@ async def fetch_telegram_history(
         
         cursor.execute(
             """
-            SELECT m.message_id, m.ticket_id, m.telegram_id, m.text, m.is_from_bot, m.timestamp, e.login,
-                   a.file_path, a.file_name, a.file_type
+            SELECT m.message_id, m.ticket_id, m.telegram_id, m.text, m.is_from_bot, m.timestamp,
+                CASE WHEN m.is_from_bot THEN COALESCE(e2.login, 'Техподдержка') ELSE e.login END AS login,
+                a.file_path, a.file_name, a.file_type
             FROM messages m
             JOIN employees e ON m.telegram_id = e.telegram_id
+            LEFT JOIN employees e2 ON m.employee_telegram_id = e2.telegram_id
             LEFT JOIN attachments a ON m.message_id = a.message_id
             WHERE m.ticket_id = ?
             ORDER BY m.timestamp DESC
@@ -1116,13 +1313,15 @@ async def fetch_telegram_history(
                 "message_id": row[0],
                 "ticket_id": row[1],
                 "telegram_id": row[2],
-                "text": f"[Ticket #{row[1]}] {row[3]}",
+                "text": row[3],  # Убираем префикс [Ticket #]
                 "is_from_bot": bool(row[4]),
                 "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
                 "login": row[6],
                 "file_path": row[7],
                 "file_name": row[8],
-                "file_type": row[9]
+                "file_type": row[9],
+                "is_history": True,  # Добавляем флаг
+                "history_ticket_id": row[1]  # Указываем ID тикета для истории
             }
             for row in cursor.fetchall()
         ]
@@ -1302,28 +1501,76 @@ async def unmute_user(
     return {"status": "ok"}
 
 @app.get("/search", response_class=HTMLResponse)
-async def search_tickets(request: Request, query: str = Query(...), employee: dict = Depends(get_current_user)):
-    logging.debug(f"Поиск тикетов с запросом: {query}")
+async def search_tickets(
+    request: Request,
+    query: str = Query("", description="Search query"),
+    status: str = Query("", description="Ticket status filter: open, closed"),
+    issue_type: str = Query("", description="Issue type filter: tech, org, ins, n/a"),
+    sort: str = Query("timestamp_desc", description="Sort order: timestamp_desc, timestamp_asc, ticket_id_desc, ticket_id_asc"),
+    employee: dict = Depends(get_current_user)
+):
+    logging.debug(f"Поиск тикетов: query={query}, status={status}, issue_type={issue_type}, sort={sort}")
     async with db_lock:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT t.ticket_id, t.telegram_id, e.login, 
+            
+            # Базовый SQL-запрос
+            base_query = """
+                SELECT DISTINCT t.ticket_id, t.telegram_id, t.status, e.login,
                        m.text AS last_message, m.timestamp AS last_message_timestamp,
                        a.file_path, a.file_name, a.file_type,
                        t.issue_type, t.assigned_to, e2.login AS assigned_login
-                FROM tickets t 
-                JOIN employees e ON t.telegram_id = e.telegram_id 
-                JOIN messages m ON t.ticket_id = m.ticket_id
+                FROM tickets t
+                JOIN employees e ON t.telegram_id = e.telegram_id
+                LEFT JOIN messages m ON t.ticket_id = m.ticket_id
                 LEFT JOIN attachments a ON m.message_id = a.message_id
                 LEFT JOIN employees e2 ON t.assigned_to = e2.telegram_id
-                WHERE m.text LIKE ?
-                ORDER BY m.timestamp DESC
-            """, (f"%{query}%",))
+                WHERE 1=1
+            """
+            params = []
+            
+            # Условия поиска
+            if query:
+                query_lower = f"%{query.lower()}%"
+                base_query += """
+                    AND (
+                        LOWER(m.text) LIKE ?
+                        OR LOWER(e.login) LIKE ?
+                        OR LOWER(t.issue_type) LIKE ?
+                    )
+                """
+                params.extend([query_lower, query_lower, query_lower])
+
+            
+            # Фильтр по статусу
+            if status in ["open", "closed"]:
+                base_query += " AND t.status = ?"
+                params.append(status)
+            
+            # Фильтр по типу проблемы
+            if issue_type in ["tech", "org", "ins"]:
+                base_query += " AND t.issue_type = ?"
+                params.append(issue_type)
+            elif issue_type == "n/a":
+                base_query += " AND t.issue_type IS NULL"
+            
+            # Сортировка
+            if sort == "timestamp_asc":
+                base_query += " ORDER BY m.timestamp ASC"
+            elif sort == "ticket_id_desc":
+                base_query += " ORDER BY t.ticket_id DESC"
+            elif sort == "ticket_id_asc":
+                base_query += " ORDER BY t.ticket_id ASC"
+            else:  # timestamp_desc (default)
+                base_query += " ORDER BY m.timestamp DESC"
+            
+            cursor.execute(base_query, params)
             astana_tz = pytz.timezone('Asia/Almaty')
             tickets = [
                 {
                     "id": row["ticket_id"],
+                    "telegram_id": row["telegram_id"],
+                    "status": row["status"],
                     "login": row["login"],
                     "last_message": row["last_message"],
                     "last_message_timestamp": datetime.fromisoformat(row["last_message_timestamp"]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S') if row["last_message_timestamp"] else None,
@@ -1336,7 +1583,20 @@ async def search_tickets(request: Request, query: str = Query(...), employee: di
                 }
                 for row in cursor.fetchall()
             ]
-    return templates.TemplateResponse("index.html", {"request": request, "tickets": tickets, "employee": employee})
+    
+    return templates.TemplateResponse(
+        "search.html",
+        {
+            "request": request,
+            "tickets": tickets,
+            "employee": employee,
+            "query": query.strip("%") if query else "",
+            "status": status,
+            "issue_type": issue_type,
+            "sort": sort,
+            "BASE_URL": BASE_URL
+        }
+    )
 
 @app.get("/ticket/{ticket_id}/ratings")
 async def get_ticket_ratings(ticket_id: int, employee: dict = Depends(get_current_user)):

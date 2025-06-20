@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PumbaBot: Настройки</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="icon" type="image/png" href="/static/favicon.png">
+</head>
+<body class="p-4 bg-gray-100">
+    <div class="max-w-2xl mx-auto">
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-2xl font-bold">Настройки</h1>
+        </div>
+        <form action="/save_settings" method="post" class="bg-white p-6 rounded-lg shadow-md space-y-6">
+            <div>
+                <label for="registration_greeting" class="block text-sm font-medium text-gray-700">Приветствие при регистрации</label>
+                <textarea id="registration_greeting" name="registration_greeting" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm" rows="4">{{ settings.registration_greeting }}</textarea>
+            </div>
+            <div>
+                <label for="new_ticket_response" class="block text-sm font-medium text-gray-700">Ответ на новый тикет</label>
+                <textarea id="new_ticket_response" name="new_ticket_response" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm" rows="4">{{ settings.new_ticket_response }}</textarea>
+            </div>
+            <div>
+                <label for="non_working_hours_message" class="block text-sm font-medium text-gray-700">Сообщение в нерабочее время</label>
+                <textarea id="non_working_hours_message" name="non_working_hours_message" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm" rows="4">{{ settings.non_working_hours_message }}</textarea>
+            </div>
+            <div>
+                <label for="holiday_message" class="block text-sm font-medium text-gray-700">Сообщение в праздничный день</label>
+                <textarea id="holiday_message" name="holiday_message" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm" rows="4">{{ settings.holiday_message }}</textarea>
+            </div>
+            <div class="flex space-x-4">
+                <div class="flex-1">
+                    <label for="working_hours_start" class="block text-sm font-medium text-gray-700">Начало рабочего дня</label>
+                    <input type="time" id="working_hours_start" name="working_hours_start" value="{{ settings.working_hours_start }}" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                </div>
+                <div class="flex-1">
+                    <label for="working_hours_end" class="block text-sm font-medium text-gray-700">Конец рабочего дня</label>
+                    <input type="time" id="working_hours_end" name="working_hours_end" value="{{ settings.working_hours_end }}" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Выходные дни</label>
+                <div class="mt-2 space-x-4">
+                    {% for day, name in [(0, 'Пн'), (1, 'Вт'), (2, 'Ср'), (3, 'Чт'), (4, 'Пт'), (5, 'Сб'), (6, 'Вс')] %}
+                    <label class="inline-flex items-center">
+                        <input type="checkbox" name="weekend_days" value="{{ day }}" {% if day in settings.weekend_days %}checked{% endif %} class="form-checkbox h-4 w-4 text-blue-600">
+                        <span class="ml-2 text-sm text-gray-600">{{ name }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="flex justify-end space-x-4">
+                <a href="/" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold py-2 px-4 rounded">Отмена</a>
+                <button type="button" onclick="resetSettings()" class="bg-yellow-500 hover:bg-yellow-600 text-white font-semibold py-2 px-4 rounded">Сбросить настройки</button>
+                <button type="submit" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded">Сохранить</button>
+            </div>
+        </form>
+    </div>
+    <script>
+        async function resetSettings() {
+            if (!confirm('Вы уверены, что хотите сбросить настройки до значений по умолчанию?')) {
+                return;
+            }
+            try {
+                const response = await fetch('/reset_settings', {
+                    method: 'POST',
+                    credentials: 'include', // Отправляем куки (session_token)
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                if (response.ok) {
+                    window.location.href = '/settings'; // Перенаправляем на /settings
+                } else {
+                    alert('Ошибка при сбросе настроек: ' + response.statusText);
+                }
+            } catch (error) {
+                alert('Ошибка при сбросе настроек: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,11 +1,11 @@
 import asyncio
 import uvicorn
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command
+from aiogram.filters import Command, BaseFilter
 from aiogram.types import Message, ContentType, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from app import app, sio, message_queue, set_event_loop, send_notification_to_topic
+from app import app, sio, message_queue, set_event_loop, send_notification_to_topic, get_setting
 from dotenv import load_dotenv
 import os
 import logging
@@ -40,6 +40,12 @@ dp = Dispatcher()
 class RegistrationStates(StatesGroup):
     waiting_for_login = State()
 
+class ChatTopicFilter(BaseFilter):
+    async def __call__(self, message: Message) -> bool:
+        is_private = message.chat.type == "private"
+        logging.debug(f"Проверка сообщения: chat_id={message.chat.id}, chat_type={message.chat.type}, is_private={is_private}")
+        return is_private
+
 def init_db():
     logging.debug("Начало инициализации базы данных")
     conn = sqlite3.connect("support.db", timeout=10)
@@ -71,12 +77,14 @@ def init_db():
             message_id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticket_id INTEGER,
             telegram_id INTEGER,
+            employee_telegram_id INTEGER,
             text TEXT,
             is_from_bot INTEGER,
             timestamp TEXT,
             telegram_message_id INTEGER,
             FOREIGN KEY (ticket_id) REFERENCES tickets (ticket_id),
-            FOREIGN KEY (telegram_id) REFERENCES employees (telegram_id)
+            FOREIGN KEY (telegram_id) REFERENCES employees (telegram_id),
+            FOREIGN KEY (employee_telegram_id) REFERENCES employees (telegram_id)
         )
     """)
     cursor.execute("""
@@ -185,15 +193,59 @@ def init_db():
     cursor.execute("SELECT telegram_id, login, is_admin FROM employees")
     employees = cursor.fetchall()
     logging.debug(f"Содержимое таблицы employees после init_db: {employees}")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    # Инициализация настроек по умолчанию
+    default_settings = [
+        ('registration_greeting', 'Вы можете создавать тикеты, отправив сообщение или файл.'),
+        ('new_ticket_response', 'Обращение принято. При необходимости прикрепите скриншот или файл с логами.'),
+        ('non_working_hours_message', 'Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.'),
+        ('holiday_message', 'Сегодня праздничный день, поэтому ответ может занять больше времени.'),
+        ('working_hours_start', '12:00'),
+        ('working_hours_end', '00:00'),
+        ('weekend_days', '0,6'),  # 0=воскресенье, 6=суббота
+        ('is_holiday', '0')  # 0=не праздник, 1=праздник
+    ]
+    for key, value in default_settings:
+        cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (key, value)
+        )
+    conn.commit()
     conn.close()
     logging.debug("Инициализация базы данных завершена")
 
 def is_working_hours():
+    from app import get_setting
     astana_tz = pytz.timezone('Asia/Almaty')
     now = datetime.now(astana_tz)
-    is_weekday = now.weekday() < 5
-    hour = now.hour
-    is_working_time = 12 <= hour < 24
+    is_holiday = get_setting("is_holiday", "0") == "1"
+    weekend_days = [int(day) for day in get_setting("weekend_days", "0,6").split(",")]
+    working_hours_start = get_setting("working_hours_start", "12:00")
+    working_hours_end = get_setting("working_hours_end", "00:00")
+    
+    logging.debug(f"Проверка рабочего времени: is_holiday={is_holiday}, now={now}, weekend_days={weekend_days}, "
+                  f"working_hours_start={working_hours_start}, working_hours_end={working_hours_end}")
+    
+    if is_holiday:
+        logging.debug("Сегодня праздничный день, возвращаем False")
+        return False
+    
+    is_weekday = now.weekday() not in weekend_days
+    logging.debug(f"Проверка дня недели: now.weekday()={now.weekday()}, is_weekday={is_weekday}")
+    
+    start_time = datetime.strptime(working_hours_start, "%H:%M").time()
+    end_time = datetime.strptime(working_hours_end, "%H:%M").time()
+    current_time = now.time()
+    
+    is_working_time = start_time <= current_time <= end_time
+    logging.debug(f"Проверка времени: current_time={current_time}, start_time={start_time}, end_time={end_time}, "
+                  f"is_working_time={is_working_time}")
+    
     return is_weekday and is_working_time
 
 def get_unique_filename(filename: str, directory: str = "Uploads"):
@@ -266,7 +318,8 @@ async def start_command(message: Message, state: FSMContext):
         if is_admin:
             await message.reply(f"Добро пожаловать, {login}! Вы администратор (техподдержка). Можете создавать тикеты и работать в веб-интерфейсе: {BASE_URL}")
         else:
-            await message.reply(f"Добро пожаловать, {login}! Вы можете создавать тикеты, отправив сообщение или файл.")
+            greeting = get_setting("registration_greeting", "Вы можете создавать тикеты, отправив сообщение или файл.")
+            await message.reply(f"Добро пожаловать, {login}! {greeting}")
     else:
         await message.reply("Вы не зарегистрированы. Пожалуйста, укажите ваш логин для регистрации.")
         await state.set_state(RegistrationStates.waiting_for_login)
@@ -296,7 +349,8 @@ async def process_registration_login(message: Message, state: FSMContext):
             (telegram_id, login, False, full_name)
         )
         conn.commit()
-        await message.reply(f"Регистрация завершена! Добро пожаловать, {login}! Вы можете создавать тикеты, отправив сообщение или файл.")
+        greeting = get_setting("registration_greeting", "Вы можете создавать тикеты, отправив сообщение или файл.")
+        await message.reply(f"Регистрация завершена! Добро пожаловать, {login}! {greeting}")
         logging.debug(f"Зарегистрирован новый пользователь: telegram_id={telegram_id}, login={login}")
     except sqlite3.IntegrityError:
         await message.reply("Этот логин уже занят. Пожалуйста, выберите другой логин.")
@@ -313,11 +367,11 @@ async def process_registration_login(message: Message, state: FSMContext):
 async def my_id_command(message: Message):
     await message.reply(f"Ваш Telegram ID: {message.from_user.id}")
 
-@dp.message(F.photo)
+@dp.message(ChatTopicFilter(), F.photo)
 async def handle_photo(message: Message):
     await handle_file(message, 'image')
 
-@dp.message(F.document)
+@dp.message(ChatTopicFilter(), F.document)
 async def handle_document(message: Message):
     await handle_file(message, 'document')
 
@@ -375,8 +429,8 @@ async def handle_file(message: Message, file_type: str):
 
     text = message.caption if message.caption else f"[{file_type}] {file_name}"
     cursor.execute(
-        "INSERT INTO messages (ticket_id, telegram_id, text, is_from_bot, timestamp, telegram_message_id) VALUES (?, ?, ?, ?, ?, ?)",
-        (ticket_id, telegram_id, text, 0, timestamp, message.message_id)
+        "INSERT INTO messages (ticket_id, telegram_id, employee_telegram_id, text, is_from_bot, timestamp, telegram_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (ticket_id, telegram_id, None, text, 0, timestamp, message.message_id)
     )
     message_id = cursor.lastrowid
 
@@ -415,12 +469,15 @@ async def handle_file(message: Message, file_type: str):
             "issue_type": None
         })
         await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
-        reply_text = "Обращение принято. Файл получен."
+        reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
         if not is_working_hours():
-            reply_text += "\n\nОбратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени."
+            if get_setting("is_holiday", "0") == "1":
+                reply_text += "\n\n" + get_setting("holiday_message", "Сегодня праздничный день, поэтому ответ может занять больше времени.")
+            else:
+                reply_text += "\n\n" + get_setting("non_working_hours_message", "Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.")
         await message.reply(reply_text)
 
-@dp.message(F.voice)
+@dp.message(ChatTopicFilter(), F.voice)
 async def handle_voice(message: Message):
     telegram_id = message.from_user.id
     logging.debug(f"Получено голосовое сообщение от telegram_id={telegram_id}")
@@ -436,7 +493,7 @@ async def handle_voice(message: Message):
     await message.reply("Извините, мы не обрабатываем голосовые сообщения. Пожалуйста, отправьте ваш запрос в текстовом виде.")
     logging.debug(f"Отправлен ответ на голосовое сообщение для telegram_id={telegram_id}")
 
-@dp.message(F.text)
+@dp.message(ChatTopicFilter(), F.text)
 async def handle_text_message(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     current_state = await state.get_state()
@@ -490,8 +547,8 @@ async def handle_text_message(message: Message, state: FSMContext):
             ticket_id = ticket[0]
 
         cursor.execute(
-            "INSERT INTO messages (ticket_id, telegram_id, text, is_from_bot, timestamp, telegram_message_id) VALUES (?, ?, ?, ?, ?, ?)",
-            (ticket_id, telegram_id, text, 0, timestamp, message.message_id)
+            "INSERT INTO messages (ticket_id, telegram_id, employee_telegram_id, text, is_from_bot, timestamp, telegram_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ticket_id, telegram_id, None, text, 0, timestamp, message.message_id)
         )
         message_id = cursor.lastrowid
         conn.commit()
@@ -518,9 +575,12 @@ async def handle_text_message(message: Message, state: FSMContext):
                 "issue_type": None
             })
             await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
-            reply_text = "Обращение принято. При необходимости прикрепите скриншот или файл с логами."
+            reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
             if not is_working_hours():
-                reply_text += "\n\nОбратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени."
+                if get_setting("is_holiday", "0") == "1":
+                    reply_text += "\n\n" + get_setting("holiday_message", "Сегодня праздничный день, поэтому ответ может занять больше времени.")
+                else:
+                    reply_text += "\n\n" + get_setting("non_working_hours_message", "Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.")
             await message.reply(reply_text)
     else:
         ticket_id, message_id = message_data
