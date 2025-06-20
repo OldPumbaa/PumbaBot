@@ -1,14 +1,5 @@
-# PumbaBot
-<table style="border: 0; border-collapse: collapse;">
-  <tr>
-    <td style="vertical-align: top; padding-right: 20px; border: 0;">
-      <img src="static/favicon.png" alt="logo" style="width: 100px; margin-right: 20px;">
-    </td>
-    <td style="vertical-align: top; border: 0;">
-      <strong>PumbaBot</strong> — это универсальный бот технической поддержки, интегрированный с Telegram и веб-приложением. Он предлагает полный контроль над обращениями пользователей и множество других возможностей. Проект может быть развернут на собственном сервере и использован как в личных, так и в open-source проектах.
-    </td>
-  </tr>
-</table>
+# PumbaBot <img src="static/favicon.png" alt="logo" style="width: 100px; margin-right: 20px;">
+PumbaBot</strong> — это универсальный бот технической поддержки, интегрированный с Telegram и веб-приложением. Он предлагает полный контроль над обращениями пользователей и множество других возможностей. Проект может быть развернут на собственном сервере и использован как в личных, так и в open-source проектах.
 
 # Структура
 Система состоит из двух частей - Telegram бота и веб-приложения.
