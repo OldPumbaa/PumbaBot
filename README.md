@@ -53,6 +53,7 @@ cp .env.example .env
     * NOTIFICATION_CHAT_ID: ID чата для уведомлений
     * NOTIFICATION_TOPIC_ID: ID топика для уведомлений.
     * BASE_URL: URL вашего веб-приложения (например, https://your-site.com).
+* Отредактируйте login.html, прописав в нем название вашего бота;
 5. Инициализируйте базу данных: База данных SQLite (support.db) создается автоматически при первом запуске.
 
 # Запуск
