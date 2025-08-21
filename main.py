@@ -16,6 +16,10 @@ import pytz
 import time
 import re
 
+from collections import defaultdict
+media_group_collector = defaultdict(list)
+media_group_timer = {}
+
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -27,7 +31,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
 NOTIFICATION_CHAT_ID = os.getenv("NOTIFICATION_CHAT_ID")
 NOTIFICATION_TOPIC_ID = os.getenv("NOTIFICATION_TOPIC_ID")
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8081")
 
 if not BOT_TOKEN or not ADMIN_TELEGRAM_ID:
     logging.error("BOT_TOKEN или ADMIN_TELEGRAM_ID не указаны в .env")
@@ -369,7 +373,136 @@ async def my_id_command(message: Message):
 
 @dp.message(ChatTopicFilter(), F.photo)
 async def handle_photo(message: Message):
-    await handle_file(message, 'image')
+    telegram_id = message.from_user.id
+    if is_banned(telegram_id):
+        return
+    if is_muted(telegram_id):
+        await message.reply("Вам временно запрещено писать в бота!")
+        return
+
+    conn = sqlite3.connect("support.db", timeout=10)
+    cursor = conn.cursor()
+    cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
+    employee = cursor.fetchone()
+    conn.close()
+
+    if not employee:
+        await message.reply("Вы не зарегистрированы. Используйте команду /start для регистрации.")
+        return
+
+    login = employee[0]
+    media_group_id = message.media_group_id
+
+    if not media_group_id:
+        # Одиночное фото
+        await handle_file(message, 'image')
+        return
+
+    # Собираем группу
+    media_group_collector[media_group_id].append(message)
+
+    # Отменяем предыдущий таймер
+    if media_group_id in media_group_timer:
+        media_group_timer[media_group_id].cancel()
+
+    # Вспомогательная функция для задержки
+    async def delayed_process(mg_id):
+        await asyncio.sleep(1)  # Ждём 1 сек на сбор всех фото
+        await process_media_group(mg_id)
+
+    # Запускаем таймер
+    media_group_timer[media_group_id] = asyncio.create_task(delayed_process(media_group_id))
+
+async def process_media_group(mg_id):
+    messages = media_group_collector.pop(mg_id, [])
+    if not messages:
+        return
+
+    astana_tz = pytz.timezone('Asia/Almaty')
+    timestamp = messages[0].date.astimezone(astana_tz).isoformat()
+    caption = messages[0].caption if messages[0].caption else None
+    telegram_id = messages[0].from_user.id
+    conn = sqlite3.connect("support.db", timeout=10)
+    cursor = conn.cursor()
+    cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
+    login = cursor.fetchone()[0]
+
+    cursor.execute(
+        "SELECT ticket_id FROM tickets WHERE telegram_id = ? AND status = 'open'",
+        (telegram_id,)
+    )
+    ticket = cursor.fetchone()
+    is_new_ticket = not ticket
+
+    if is_new_ticket:
+        cursor.execute(
+            "INSERT INTO tickets (telegram_id, status, created_at, issue_type) VALUES (?, ?, ?, ?)",
+            (telegram_id, "open", datetime.now(astana_tz).isoformat(), None)
+        )
+        ticket_id = cursor.lastrowid
+    else:
+        ticket_id = ticket[0]
+
+    text = caption or ""
+    cursor.execute(
+        "INSERT INTO messages (ticket_id, telegram_id, employee_telegram_id, text, is_from_bot, timestamp, telegram_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (ticket_id, telegram_id, None, text, 0, timestamp, messages[0].message_id)
+    )
+    message_id = cursor.lastrowid
+
+    attachments_list = []
+    for i, msg in enumerate(messages):
+        file_id = msg.photo[-1].file_id
+        file_name_original = f"image_{int(time.time())}_{i}.jpg"
+        file_name = get_unique_filename(file_name_original, directory="Uploads")
+        file_path = f"Uploads/{file_name}"
+
+        os.makedirs("Uploads", exist_ok=True)
+        file = await bot.get_file(file_id)
+        await bot.download_file(file.file_path, file_path)
+
+        cursor.execute(
+            "INSERT INTO attachments (message_id, file_path, file_name, file_type) VALUES (?, ?, ?, ?)",
+            (message_id, file_path, file_name, 'image')
+        )
+        attachments_list.append({"file_path": file_path, "file_name": file_name, "file_type": "image"})
+
+
+    conn.commit()
+    conn.close()
+
+    await sio.emit("new_message", {
+        "ticket_id": ticket_id,
+        "telegram_id": telegram_id,
+        "text": text,
+        "is_from_bot": False,
+        "timestamp": timestamp,
+        "login": login,
+        "message_id": message_id,
+        "attachments": attachments_list
+    })
+
+    if is_new_ticket:
+        await sio.emit("update_tickets", {
+            "ticket_id": ticket_id,
+            "telegram_id": telegram_id,
+            "login": login,
+            "last_message": text,
+            "last_message_timestamp": timestamp,
+            "issue_type": None,
+            "attachments": attachments_list  # Добавили для index.html
+        })
+        await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
+        reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
+        if not is_working_hours():
+            if get_setting("is_holiday", "0") == "1":
+                reply_text += "\n\n" + get_setting("holiday_message", "Сегодня праздничный день, поэтому ответ может занять больше времени.")
+            else:
+                reply_text += "\n\n" + get_setting("non_working_hours_message", "Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.")
+        await messages[0].reply(reply_text)
+
+    if mg_id in media_group_timer:
+        del media_group_timer[mg_id]
 
 @dp.message(ChatTopicFilter(), F.document)
 async def handle_document(message: Message):
@@ -415,19 +548,20 @@ async def handle_file(message: Message, file_type: str):
     else:
         ticket_id = ticket[0]
 
-    file_id = message.photo[-1].file_id if file_type == 'image' else message.document.file_id
     if file_type == 'image':
-        file_name = f"image_{int(time.time())}.jpg"
+        file_id = message.photo[-1].file_id
+        file_name_original = f"image_{int(time.time())}.jpg"
     else:
-        file_name_original = message.document.file_name if message.document.file_name else 'document.txt'
-        file_name = get_unique_filename(file_name_original, directory="Uploads")
+        file_id = message.document.file_id
+        file_name_original = message.document.file_name if message.document.file_name else 'document'
+    file_name = get_unique_filename(file_name_original, directory="Uploads")
     file_path = f"Uploads/{file_name}"
 
     os.makedirs("Uploads", exist_ok=True)
     file = await bot.get_file(file_id)
     await bot.download_file(file.file_path, file_path)
 
-    text = message.caption if message.caption else f"[{file_type}] {file_name}"
+    text = message.caption or ""
     cursor.execute(
         "INSERT INTO messages (ticket_id, telegram_id, employee_telegram_id, text, is_from_bot, timestamp, telegram_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (ticket_id, telegram_id, None, text, 0, timestamp, message.message_id)
@@ -441,32 +575,29 @@ async def handle_file(message: Message, file_type: str):
     conn.commit()
     conn.close()
 
-    logging.debug(f"Отправка события new_message для ticket_id={ticket_id}, file={file_name}")
+    attachments_list = [{"file_path": file_path, "file_name": file_name, "file_type": file_type}]
+
     await sio.emit("new_message", {
         "ticket_id": ticket_id,
         "telegram_id": telegram_id,
-        "text": text,
+        "text": text,  # <--- без [image]
         "is_from_bot": False,
         "timestamp": timestamp,
         "login": login,
-        "file_path": file_path,
-        "file_name": file_name,
-        "file_type": file_type,
-        "message_id": message_id
+        "message_id": message_id,
+        "attachments": attachments_list
     })
 
+
     if is_new_ticket:
-        logging.debug(f"Отправка события update_tickets для нового ticket_id={ticket_id}")
         await sio.emit("update_tickets", {
             "ticket_id": ticket_id,
             "telegram_id": telegram_id,
             "login": login,
             "last_message": text,
             "last_message_timestamp": timestamp,
-            "file_path": file_path,
-            "file_name": file_name,
-            "file_type": file_type,
-            "issue_type": None
+            "issue_type": None,
+            "attachments": attachments_list
         })
         await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
         reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
@@ -762,6 +893,7 @@ async def process_message_queue():
                 if telegram_message_id:
                     logging.debug(f"Редактирование сообщения telegram_message_id={telegram_message_id}")
                     conn = sqlite3.connect("support.db", timeout=10)
+                    conn.row_factory = sqlite3.Row
                     cursor = conn.cursor()
                     cursor.execute("SELECT file_type FROM attachments WHERE message_id = ?", (message_id,))
                     attachment = cursor.fetchone()
@@ -868,7 +1000,7 @@ async def main():
     loop = asyncio.get_event_loop()
     set_event_loop(loop)
     bot_task = asyncio.create_task(run_bot())
-    config = uvicorn.Config(app=app, host="0.0.0.0", port=8080, loop="asyncio")
+    config = uvicorn.Config(app=app, host="0.0.0.0", port=8081, loop="asyncio")
     server = uvicorn.Server(config)
     await asyncio.gather(bot_task, server.serve())
 

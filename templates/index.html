@@ -1,6 +1,8 @@
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PumbaBot: Главная</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css" integrity="sha512-Kc323vGBEqzTmouAECnVceyQqyqdsSiqLQISBL29aUW4U/M7pSPA/gEUZQqv1cwx4OnYxTxve5UMg5GT6L4JJg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
@@ -8,247 +10,310 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body class="p-4">
-    <div class="flex justify-between items-center mb-4">
-        <h1 class="text-2xl">Тикеты техподдержки</h1>
-        <div class="flex flex-row items-center space-x-2">
-    <span class="mr-4">Вы вошли как: {{ employee.login }} <span id="employee-ratings" class="text-sm text-gray-600">Загрузка рейтингов...</span></span>
-    <a href="/admin/employees" class="bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded flex items-center" aria-label="Управление сотрудниками">
-        <i class="fas fa-users-between-lines"></i>
-    </a>
-    <a href="/settings" class="bg-gray-500 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded flex items-center" aria-label="Настройки">
-        <i class="fas fa-gears"></i>
-    </a>
-    <a href="/logout" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded flex items-center" aria-label="Выйти">
-        <i class="fas fa-door-open"></i>
-    </a>
-</div>
-    </div>
-    <div class="mb-4">
-    <form action="/search" method="get" class="flex items-center">
-        <input type="text" autocomplete="off" name="query" placeholder="Поиск по тикетам..." class="border p-2 rounded-l-md w-full max-w-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <button type="submit" class="bg-blue-500 text-white p-2 rounded-r-md hover:bg-blue-600 flex items-center" aria-label="Найти">
-    <i class="fas fa-magnifying-glass"></i>
-</button>
-    </form>
-    <a href="/search" class="mt-2 inline-block text-blue-500 underline hover:text-blue-700">Расширенный поиск</a>
-</div>
-    </div>
-    <div class="mb-4">
-    <label class="inline-flex items-center">
-        <input type="checkbox" id="is-holiday" name="is_holiday" {% if settings.is_holiday == '1' %}checked{% endif %} class="form-checkbox h-4 w-4 text-blue-600">
-        <span class="ml-2 text-sm text-gray-600">Выходной</span>
-    </label>
-</div>
-    <div id="ticketsList">
-        {% for ticket in tickets %}
-        <div class="border p-4 mb-2" data-ticket-id="{{ ticket.id }}">
-            <p class="font-bold inline">Тикет #{{ ticket.id }}</p>
-            <span class="inline text-xs px-1 py-0.5 rounded text-white {% if ticket.issue_type == 'tech' %}bg-red-500{% elif ticket.issue_type == 'org' %}bg-blue-500{% elif ticket.issue_type == 'ins' %}bg-green-500{% else %}bg-gray-500{% endif %}">
-                {{ ticket.issue_type | default('n/a') }}
-            </span>
-            <p>Пользователь: {{ ticket.login }}</p>
-            <p>Ответственный: {{ ticket.assigned_login or 'Не назначен' }}</p>
-            {% if ticket.last_message %}
-            <p class="text-sm text-gray-600">
-                Последнее сообщение: {{ ticket.last_message }} 
-                <span class="text-xs text-gray-500">({{ ticket.last_message_timestamp }})</span>
-                {% if ticket.file_type %}
-                <span class="inline-block">
-                    {% if ticket.file_type == 'image' %}
-                    <img src="/{{ ticket.file_path }}" alt="{{ ticket.file_name }}" class="inline h-6 w-6">
-                    {% else %}
-                    <a href="/{{ ticket.file_path }}" class="inline-block text-blue-500 underline">
-                        {% if ticket.file_name|length > 20 %}
-                        {{ ticket.file_name[:17] + '...' }}
-                        {% else %}
-                        {{ ticket.file_name }}
-                        {% endif %}
-                    </a>
-                    {% endif %}
-                </span>
-                {% endif %}
-            </p>
-            {% else %}
-            <p class="text-sm text-gray-600">Сообщений пока нет</p>
-            {% endif %}
-            <a href="/ticket/{{ ticket.id }}" class="bg-blue-500 text-white p-2 rounded inline-block mt-2">Открыть</a>
+    <div class="mx-auto max-w-screen-2xl px-2">
+        <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 mb-4">
+            <h1 class="text-xl sm:text-2xl font-bold">Тикеты техподдержки</h1>
+            <div class="flex flex-wrap items-center gap-2 text-sm sm:text-base">
+                <span class="text-xs sm:text-sm text-gray-600">Вы вошли как: {{ employee.login }} <span id="employee-ratings" class="text-sm text-gray-600">Загрузка рейтингов...</span></span>
+                <a href="/admin/employees" class="bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded flex items-center" aria-label="Управление сотрудниками">
+                    <i class="fas fa-users-between-lines"></i>
+                </a>
+                <a href="/settings" class="bg-gray-500 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded flex items-center" aria-label="Настройки">
+                    <i class="fas fa-gears"></i>
+                </a>
+                <a href="/logout" class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded flex items-center" aria-label="Выйти">
+                    <i class="fas fa-door-open"></i>
+                </a>
+            </div>
         </div>
-        {% endfor %}
-    </div>
 
-    <script>
-        function shortenFilename(filename) {
-            if (!filename) return 'unknown';
-            if (filename.length > 20) {
-                return filename.substring(0, 17) + '...';
+        <div class="mb-4">
+            <form action="/search" method="get" class="flex items-center">
+                <input type="text" autocomplete="off" name="query" placeholder="Поиск по тикетам..." class="border p-2 rounded-l-md w-full max-w-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <button type="submit" class="bg-blue-500 text-white p-2 rounded-r-md hover:bg-blue-600 flex items-center" aria-label="Найти">
+                    <i class="fas fa-magnifying-glass"></i>
+                </button>
+            </form>
+            <a href="/search" class="mt-2 inline-block text-blue-500 underline hover:text-blue-700">Расширенный поиск</a>
+        </div>
+
+        <div class="mb-4">
+            <label class="inline-flex items-center">
+                <input type="checkbox" id="is-holiday" name="is_holiday" {% if settings.is_holiday == '1' %}checked{% endif %} class="form-checkbox h-4 w-4 text-blue-600">
+                <span class="ml-2 text-sm text-gray-600">Выходной</span>
+            </label>
+        </div>
+
+        <div id="ticketsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[70vh] overflow-y-auto">
+            {% for ticket in tickets %}
+            <div class="border p-4 rounded-lg shadow-sm bg-white hover:shadow-md transition flex flex-col h-full" data-ticket-id="{{ ticket.id }}">
+                
+                <div class="flex-grow">
+                    <div class="flex items-center gap-2 mb-1">
+                        <p class="font-bold m-0">Тикет #{{ ticket.id }}</p>
+                        <span data-role="issue-type"
+                            class="inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap
+                            {% if ticket.issue_type == 'tech' %}bg-red-500{% elif ticket.issue_type == 'org' %}bg-blue-500{% elif ticket.issue_type == 'ins' %}bg-green-500{% else %}bg-gray-500{% endif %}">
+                            {{ ticket.issue_type | default('n/a') }}
+                        </span>
+                    </div>
+
+                    <p>Пользователь: {{ ticket.login }}</p>
+                    <p data-role="assigned">Ответственный: {{ ticket.assigned_login or 'Не назначен' }}</p>
+                    <div class="last-message text-sm text-gray-600 mt-2">
+                        {% if ticket.last_message or ticket.attachments %}
+                            <p class="text-sm text-gray-700 line-clamp-2">
+                                Последнее сообщение:
+                                {% if not ticket.last_message and ticket.attachments %}
+                                    {% set att = ticket.attachments[0] %}
+                                    {% if att.file_type == 'image' %}
+                                        [изображение]
+                                    {% else %}
+                                        [файл]
+                                    {% endif %}
+                                {% else %}
+                                    <span class="last-msg-text break-words">{{ ticket.last_message }}</span>
+                                {% endif %}
+                                <span class="text-xs text-gray-400">({{ ticket.last_message_timestamp }})</span>
+                            </p>
+                        {% else %}
+                            <p class="text-xs text-gray-400 italic">Сообщений пока нет</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <a href="/ticket/{{ ticket.id }}" 
+                class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded inline-flex items-center mt-2 self-start">
+                Открыть
+                </a>
+            </div>
+
+            {% endfor %}
+        </div>
+
+        <script>
+            function shortenFilename(filename) {
+                if (!filename) return 'unknown';
+                if (filename.length > 20) {
+                    return filename.substring(0, 17) + '...';
+                }
+                return filename;
             }
-            return filename;
-        }
 
-        const socket = io(window.BASE_URL, { transports: ['websocket', 'polling'] });
+            const socket = io('{{ BASE_URL }}', { transports: ['websocket', 'polling'] });
 
-        socket.on('connect', () => {
-            console.log('Подключено к SocketIO');
-        });
+            socket.on('connect', () => {
+                console.log('Подключено к SocketIO');
+            });
 
-        socket.on('connect_error', (error) => {
-            console.error('Ошибка подключения к SocketIO:', error);
-        });
+            socket.on('connect_error', (error) => {
+                console.error('Ошибка подключения к SocketIO:', error);
+            });
 
-        socket.on("update_tickets", (data) => {
-            console.log('Новый тикет:', data);
-            const ticketDiv = document.createElement("div");
-            ticketDiv.className = "border p-4 mb-2";
-            ticketDiv.setAttribute("data-ticket-id", data.ticket_id);
-            ticketDiv.innerHTML = `
-                <p class="font-bold inline">Тикет #${data.ticket_id}</p>
-                <span class="inline text-xs px-1 py-0.5 rounded text-white ${data.issue_type === 'tech' ? 'bg-red-500' : data.issue_type === 'org' ? 'bg-blue-500' : data.issue_type === 'ins' ? 'bg-green-500' : 'bg-gray-500'}">
-                    ${data.issue_type || 'n/a'}
-                </span>
-                <p>Пользователь: ${data.login || 'Unknown'}</p>
-                <p>Ответственный: ${data.assigned_login || 'Не назначен'}</p>
-                ${data.last_message ? `
-                    <p class="text-sm text-gray-600">
-                        Последнее сообщение: ${data.last_message} 
-                        <span class="text-xs text-gray-500">(${data.last_message_timestamp})</span>
-                        ${data.file_type ? `
-                            <span class="inline-block">
-                                ${data.file_type === 'image' ? `
-                                    <img src="/${data.file_path || ''}" alt="${data.file_name || 'image'}" class="inline h-6 w-6">
-                                ` : `
-                                    <a href="/${data.file_path || ''}" class="inline-block text-blue-500 underline">${shortenFilename(data.file_name)}</a>
-                                `}
+            socket.on("update_tickets", (data) => {
+                console.log('Новый тикет:', data);
+
+                const issueType = data.issue_type || 'n/a';
+                const issueTypeClass =
+                    issueType === 'tech' ? 'bg-red-500' :
+                    issueType === 'org'  ? 'bg-blue-500' :
+                    issueType === 'ins'  ? 'bg-green-500' : 'bg-gray-500';
+
+                let lastMsgText = (data.last_message && data.last_message.trim()) 
+                    ? trimText(data.last_message) 
+                    : '';
+
+                if ((!lastMsgText || lastMsgText.length === 0) &&
+                    Array.isArray(data.attachments) && data.attachments.length > 0) {
+                    const att = data.attachments[0];
+                    lastMsgText = att.file_type === 'image' ? '[изображение]' : '[файл]';
+                }
+
+                const ts = data.last_message_timestamp || data.timestamp || '';
+                const lastMessageHtml = lastMsgText
+                    ? `<p>Последнее сообщение: ${escapeHtml(lastMsgText)} 
+                        <span class="text-xs text-gray-500">(${escapeHtml(ts)})</span>
+                    </p>`
+                    : `<p class="text-sm text-gray-600">Сообщений пока нет</p>`;
+
+                const ticketDiv = document.createElement("div");
+                ticketDiv.className = "border p-4 mb-2 rounded-lg shadow-sm bg-white hover:shadow-md transition flex flex-col h-full";
+                ticketDiv.setAttribute("data-ticket-id", data.ticket_id);
+
+                ticketDiv.innerHTML = `
+                    <div class="flex-grow">
+                        <div class="flex items-center gap-2 mb-1">
+                            <p class="font-bold m-0">Тикет #${escapeHtml(data.ticket_id)}</p>
+                            <span data-role="issue-type" 
+                                class="inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap ${issueTypeClass}">
+                                ${escapeHtml(issueType)}
                             </span>
-                        ` : ''}
-                    </p>
-                ` : `
-                    <p class="text-sm text-gray-600">Сообщений пока нет</p>
-                `}
-                <a href="/ticket/${data.ticket_id}" class="bg-blue-500 text-white p-2 rounded inline-block mt-2">Открыть</a>
-            `;
-            document.getElementById("ticketsList").prepend(ticketDiv);
-        });
+                        </div>
 
-        socket.on("ticket_closed", (data) => {
-            console.log('Тикет закрыт:', data);
+                        <p>Пользователь: ${escapeHtml(data.login || 'Unknown')}</p>
+                        <p data-role="assigned">Ответственный: ${escapeHtml(data.assigned_login || 'Не назначен')}</p>
+
+                        <div class="last-message text-sm text-gray-600 mt-2">
+                            ${lastMessageHtml}
+                        </div>
+                    </div>
+
+                    <a href="/ticket/${escapeHtml(data.ticket_id)}" 
+                    class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded inline-flex items-center mt-2 self-start">
+                    Открыть
+                    </a>
+                `;
+
+
+                document.getElementById("ticketsList").prepend(ticketDiv);
+            });
+
+
+
+            socket.on("ticket_closed", (data) => {
+                console.log('Тикет закрыт:', data);
+                const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
+                if (ticketDiv) {
+                    ticketDiv.remove();
+                }
+            });
+
+            socket.on("ticket_assigned", (data) => {
             const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
             if (ticketDiv) {
-                ticketDiv.remove();
-            }
-        });
-
-        socket.on("ticket_assigned", (data) => {
-    console.log('Тикет назначен:', data);
-    const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
-    if (ticketDiv) {
-        const assignedP = ticketDiv.querySelector('p:nth-of-type(3)'); // Исправленный селектор
-        if (assignedP) {
-            assignedP.textContent = `Ответственный: ${data.assigned_login || 'Не назначен'}`;
-        }
-    }
-});
-
-        socket.on("issue_type_updated", (data) => {
-            console.log('Тип тикета обновлен:', data);
-            const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
-            if (ticketDiv) {
-                const typeSpan = ticketDiv.querySelector('span.inline');
-                if (typeSpan) {
-                    typeSpan.className = `inline text-xs px-1 py-0.5 rounded text-white ${data.issue_type === 'tech' ? 'bg-red-500' : data.issue_type === 'org' ? 'bg-blue-500' : data.issue_type === 'ins' ? 'bg-green-500' : 'bg-gray-500'}`;
-                    typeSpan.textContent = data.issue_type || 'n/a';
+                const assignedP = ticketDiv.querySelector('[data-role="assigned"]');
+                if (assignedP) {
+                assignedP.textContent = `Ответственный: ${data.assigned_login || 'Не назначен'}`;
                 }
             }
-        });
+            });
 
-        socket.on("new_message", (data) => {
-            console.log('Новое сообщение:', data);
-            if (!data.ticket_id || !data.text || !data.timestamp) {
-                console.error('Некорректные данные сообщения:', data);
-                return;
-            }
+
+            socket.on("issue_type_updated", (data) => {
             const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
             if (ticketDiv) {
-                const messageP = ticketDiv.querySelector('.text-sm');
-                if (messageP) {
-                    const isHistoryMessage = data.text.startsWith('[Ticket #');
-                    if (!isHistoryMessage) {
-                        messageP.innerHTML = `
-                            Последнее сообщение: ${data.text} 
-                            <span class="text-xs text-gray-500">(${data.timestamp})</span>
-                            ${data.file_type ? `
-                                <span class="inline-block">
-                                    ${data.file_type === 'image' ? `
-                                        <img src="/${data.file_path || ''}" alt="${data.file_name || 'image'}" class="inline h-6 w-6">
-                                    ` : `
-                                        <a href="/${data.file_path || ''}" class="inline-block text-blue-500 underline">${shortenFilename(data.file_name)}</a>
-                                    `}
-                                </span>
-                            ` : ''}
-                        `;
+                const typeSpan = ticketDiv.querySelector('[data-role="issue-type"]');
+                if (typeSpan) {
+                typeSpan.className = `inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap ${
+                    data.issue_type === 'tech' ? 'bg-red-500' :
+                    data.issue_type === 'org'  ? 'bg-blue-500' :
+                    data.issue_type === 'ins'  ? 'bg-green-500' : 'bg-gray-500'
+                }`;
+                typeSpan.textContent = data.issue_type || 'n/a';
+                }
+            }
+            });
+
+
+            socket.on("new_message", (data) => {
+                if (!data.ticket_id || !data.timestamp) return;
+                const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
+                if (!ticketDiv) return;
+
+                const messageDiv = ticketDiv.querySelector('.last-message');
+                if (!messageDiv) return;
+
+                const isHistoryMessage = data.text && data.text.startsWith('[Ticket #]');
+                if (isHistoryMessage) return;
+
+                let lastMsgText = data.text ? trimText(data.text) : '';
+                if ((!lastMsgText || lastMsgText.trim() === '') && data.attachments && data.attachments.length > 0) {
+                    const att = data.attachments[0];
+                    lastMsgText = att.file_type === 'image' ? '[изображение]' : '[файл]';
+                }
+
+                messageDiv.innerHTML = `
+                    <p class="text-sm text-gray-700 line-clamp-2">
+                        Последнее сообщение: 
+                        <span class="last-msg-text break-words">${escapeHtml(lastMsgText)}</span>
+                        <span class="text-xs text-gray-400">(${escapeHtml(data.timestamp)})</span>
+                    </p>
+                `;
+
+                });
+
+
+
+            socket.on("employee_rated", (data) => {
+                console.log('Employee rated:', data);
+                if (data.employee_id === {{ employee.telegram_id }}) {
+                    const ratingsSpan = document.getElementById('employee-ratings');
+                    if (ratingsSpan) {
+                        ratingsSpan.innerHTML = `👍 ${data.thumbs_up} | 👎 ${data.thumbs_down}`;
                     }
                 }
-            }
-        });
+            });
 
-        socket.on("employee_rated", (data) => {
-            console.log('Employee rated:', data);
-            if (data.employee_id === {{ employee.telegram_id }}) {
+            async function fetchEmployeeRatings() {
                 const ratingsSpan = document.getElementById('employee-ratings');
-                if (ratingsSpan) {
-                    ratingsSpan.innerHTML = `👍 ${data.thumbs_up} | 👎 ${data.thumbs_down}`;
+                if (!ratingsSpan) {
+                    console.error('Элемент employee-ratings не найден');
+                    return;
                 }
-            }
-        });
-
-        async function fetchEmployeeRatings() {
-            const ratingsSpan = document.getElementById('employee-ratings');
-            if (!ratingsSpan) {
-                console.error('Элемент employee-ratings не найден');
-                return;
-            }
-            try {
-                const response = await fetch(`/employee/{{ employee.telegram_id }}/ratings`, {
-                    method: 'GET',
-                    headers: { 'Accept': 'application/json' }
-                });
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const data = await response.json();
-                console.log('Получены рейтинги:', data);
-                if (data.status === 'ok') {
-                    ratingsSpan.innerHTML = `👍 ${data.thumbs_up} | 👎 ${data.thumbs_down}`;
-                } else {
-                    ratingsSpan.innerHTML = 'Нет рейтингов';
-                }
-            } catch (error) {
-                console.error('Ошибка загрузки рейтингов:', error);
-                ratingsSpan.innerHTML = 'Ошибка загрузки рейтингов';
-            }
-        }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            fetchEmployeeRatings();
-            document.getElementById('is-holiday').addEventListener('change', async (e) => {
-                const isHoliday = e.target.checked ? '1' : '0';
                 try {
-                    const response = await fetch('/update_holiday', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ is_holiday: isHoliday })
+                    const response = await fetch(`/employee/{{ employee.telegram_id }}/ratings`, {
+                        method: 'GET',
+                        headers: { 'Accept': 'application/json' }
                     });
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
-                    console.log('Статус праздника обновлен:', isHoliday);
+                    const data = await response.json();
+                    console.log('Получены рейтинги:', data);
+                    if (data.status === 'ok') {
+                        ratingsSpan.innerHTML = `👍 ${data.thumbs_up} | 👎 ${data.thumbs_down}`;
+                    } else {
+                        ratingsSpan.innerHTML = 'Нет рейтингов';
+                    }
                 } catch (error) {
-                    console.error('Ошибка обновления статуса праздника:', error);
-                    alert('Ошибка при обновлении статуса праздника');
-                    e.target.checked = !e.target.checked; // Откатить изменение
+                    console.error('Ошибка загрузки рейтингов:', error);
+                    ratingsSpan.innerHTML = 'Ошибка загрузки рейтингов';
                 }
+            }
+
+            document.addEventListener('DOMContentLoaded', () => {
+                fetchEmployeeRatings();
+
+                document.querySelectorAll('.last-msg-text').forEach(el => {
+                        el.textContent = trimText(el.textContent);
+                    });
+
+                document.getElementById('is-holiday').addEventListener('change', async (e) => {
+                    const isHoliday = e.target.checked ? '1' : '0';
+                    try {
+                        const response = await fetch('/update_holiday', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ is_holiday: isHoliday })
+                        });
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        console.log('Статус праздника обновлен:', isHoliday);
+                    } catch (error) {
+                        console.error('Ошибка обновления статуса праздника:', error);
+                        alert('Ошибка при обновлении статуса праздника');
+                        e.target.checked = !e.target.checked; // Откатить изменение
+                    }
+                });
             });
-        });
-    </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'939f0f2dee44bd4b',t:'MTc0NjI2Nzk3Ny4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>
+
+            function escapeHtml(str) {
+                return String(str ?? '')
+                    .replace(/&/g,'&amp;')
+                    .replace(/</g,'&lt;')
+                    .replace(/>/g,'&gt;')
+                    .replace(/"/g,'&quot;')
+                    .replace(/'/g,'&#039;');
+            }
+
+            function trimText(text, maxLength = 100) {
+                if (!text) return '';
+                text = text.trim();
+                return text.length > maxLength ? text.substring(0, maxLength) + '…' : text;
+            }
+
+        </script>
+    </div>
 </body>
 </html>

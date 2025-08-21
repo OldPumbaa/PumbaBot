@@ -61,11 +61,10 @@ def verify_telegram_auth(data: dict, bot_token: str) -> bool:
     if not received_hash:
         logging.error("Отсутствует hash в Telegram данных")
         return False
-    
     data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(data.items()) if v)
     secret_key = hashlib.sha256(bot_token.encode()).digest()
     computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-    logging.debug(f"Проверка подписи: computed_hash={computed_hash}, received_hash={received_hash}")
+    logging.debug(f"Проверка подписи: data={data}, data_check_string={data_check_string}, computed_hash={computed_hash}, received_hash={received_hash}")
     return computed_hash == received_hash
 
 async def get_current_user(request: Request):
@@ -298,33 +297,41 @@ async def quickview(
     cursor.execute(
         """
         SELECT m.message_id, m.ticket_id, m.telegram_id, m.text, m.is_from_bot, m.timestamp,
-            CASE WHEN m.is_from_bot THEN COALESCE(e2.login, 'Техподдержка') ELSE e.login END AS login,
-            a.file_path, a.file_name, a.file_type
+            CASE WHEN m.is_from_bot THEN COALESCE(e2.login, 'Техподдержка') ELSE e.login END AS login
         FROM messages m
         JOIN employees e ON m.telegram_id = e.telegram_id
         LEFT JOIN employees e2 ON m.employee_telegram_id = e2.telegram_id
-        LEFT JOIN attachments a ON m.message_id = a.message_id
         WHERE m.ticket_id = ?
         ORDER BY m.timestamp
         """,
         (ticket_id,)
     )
+    messages = cursor.fetchall()
+    messages_list = []
     astana_tz = pytz.timezone('Asia/Almaty')
-    messages = [
-        {
-            "message_id": row[0],
-            "ticket_id": row[1],
-            "telegram_id": row[2],
-            "text": row[3],
-            "is_from_bot": bool(row[4]),
-            "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
-            "login": row[6],
-            "file_path": row[7],
-            "file_name": row[8],
-            "file_type": row[9]
-        }
-        for row in cursor.fetchall()
-    ]
+    for row in messages:
+        cursor.execute(
+            """
+            SELECT file_path, file_name, file_type
+            FROM attachments
+            WHERE message_id = ?
+            """,
+            (row["message_id"],)
+        )
+        attachments = [
+            {"file_path": a["file_path"], "file_name": a["file_name"], "file_type": a["file_type"]}
+            for a in cursor.fetchall()
+        ]
+        messages_list.append({
+            "message_id": row["message_id"],
+            "ticket_id": row["ticket_id"],
+            "telegram_id": row["telegram_id"],
+            "text": row["text"],
+            "is_from_bot": bool(row["is_from_bot"]),
+            "timestamp": datetime.fromisoformat(row["timestamp"]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
+            "login": row["login"],
+            "attachments": attachments
+        })
     cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
     employee_data = cursor.fetchone()
     login = employee_data[0] if employee_data else "Unknown"
@@ -334,7 +341,7 @@ async def quickview(
         {
             "request": request,
             "ticket_id": ticket_id,
-            "messages": messages,
+            "messages": messages_list,
             "login": login,
             "employee": employee
         }
@@ -376,62 +383,81 @@ async def cleanup_sessions():
 async def index(request: Request, employee: dict = Depends(get_current_user)):
     logging.debug("Запрос к главной странице /")
     async with db_lock:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT t.ticket_id, t.telegram_id, e.login, 
-                    m.text AS last_message, m.timestamp AS last_message_timestamp,
-                    a.file_path, a.file_name, a.file_type,
-                    t.issue_type, t.assigned_to, e2.login AS assigned_login
-                FROM tickets t 
-                JOIN employees e ON t.telegram_id = e.telegram_id 
-                LEFT JOIN (
-                    SELECT ticket_id, text, timestamp, message_id, is_from_bot, employee_telegram_id
-                    FROM messages
-                    WHERE (ticket_id, timestamp) IN (
-                        SELECT ticket_id, MAX(timestamp)
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT t.ticket_id, t.telegram_id, e.login, 
+                        m.text AS last_message, m.timestamp AS last_message_timestamp,
+                        m.message_id,
+                        t.issue_type, t.assigned_to, e2.login AS assigned_login
+                    FROM tickets t 
+                    JOIN employees e ON t.telegram_id = e.telegram_id 
+                    LEFT JOIN (
+                        SELECT ticket_id, text, timestamp, message_id, is_from_bot, employee_telegram_id
                         FROM messages
-                        GROUP BY ticket_id
-                    )
-                ) m ON t.ticket_id = m.ticket_id
-                LEFT JOIN employees e3 ON m.employee_telegram_id = e3.telegram_id
-                LEFT JOIN attachments a ON m.message_id = a.message_id
-                LEFT JOIN employees e2 ON t.assigned_to = e2.telegram_id
-                WHERE t.status = 'open'
-            """)
-            astana_tz = pytz.timezone('Asia/Almaty')
-            tickets = [
-                {
-                    "id": row["ticket_id"],
-                    "login": row["login"],
-                    "last_message": row["last_message"],
-                    "last_message_timestamp": datetime.fromisoformat(row["last_message_timestamp"]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S') if row["last_message_timestamp"] else None,
-                    "file_path": row["file_path"],
-                    "file_name": row["file_name"],
-                    "file_type": row["file_type"],
-                    "issue_type": row["issue_type"],
-                    "assigned_to": row["assigned_to"],
-                    "assigned_login": row["assigned_login"]
-                }
-                for row in cursor.fetchall()
-            ]
-        settings = {
-        "registration_greeting": get_setting("registration_greeting"),
-        "new_ticket_response": get_setting("new_ticket_response"),
-        "non_working_hours_message": get_setting("non_working_hours_message"),
-        "holiday_message": get_setting("holiday_message"),
-        "working_hours_start": get_setting("working_hours_start"),
-        "working_hours_end": get_setting("working_hours_end"),
+                        WHERE (ticket_id, timestamp) IN (
+                            SELECT ticket_id, MAX(timestamp)
+                            FROM messages
+                            GROUP BY ticket_id
+                        )
+                    ) m ON t.ticket_id = m.ticket_id
+                    LEFT JOIN employees e3 ON m.employee_telegram_id = e3.telegram_id
+                    LEFT JOIN employees e2 ON t.assigned_to = e2.telegram_id
+                    WHERE t.status = 'open'
+                """)
+                astana_tz = pytz.timezone('Asia/Almaty')
+                tickets = []
+                for row in cursor.fetchall():
+                    attachments = []
+                    if row["message_id"]:
+                        try:
+                            cursor.execute(
+                                "SELECT file_path, file_name, file_type FROM attachments WHERE message_id = ?",
+                                (row["message_id"],)
+                            )
+                            attachments = [{"file_path": a["file_path"], "file_name": a["file_name"], "file_type": a["file_type"]} for a in cursor.fetchall()]
+                        except Exception as e:
+                            logging.error(f"Ошибка при получении attachments для message_id={row['message_id']}: {e}")
+                    tickets.append({
+                        "id": row["ticket_id"],
+                        "telegram_id": row["telegram_id"],
+                        "login": row["login"],
+                        "last_message": row["last_message"],
+                        "last_message_timestamp": datetime.fromisoformat(row["last_message_timestamp"]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S') if row["last_message_timestamp"] else None,
+                        "issue_type": row["issue_type"],
+                        "assigned_to": row["assigned_to"],
+                        "assigned_login": row["assigned_login"],
+                        "attachments": attachments
+                    })
+                logging.debug(f"Получено тикетов: {len(tickets)}, пример: {tickets[:1]}")
+        except Exception as e:
+            logging.error(f"Ошибка в обработке SQL для /: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Internal Server Error: SQL Error {str(e)}")
+
+    settings = {
+        "registration_greeting": get_setting("registration_greeting", "Добро пожаловать!"),
+        "new_ticket_response": get_setting("new_ticket_response", "Обращение принято."),
+        "non_working_hours_message": get_setting("non_working_hours_message", "Сейчас нерабочее время."),
+        "holiday_message": get_setting("holiday_message", "Сегодня выходной."),
+        "working_hours_start": get_setting("working_hours_start", "09:00"),
+        "working_hours_end": get_setting("working_hours_end", "18:00"),
         "weekend_days": [int(day) for day in get_setting("weekend_days", "0,6").split(",")],
         "is_holiday": get_setting("is_holiday", "0")
-        }
-        return templates.TemplateResponse("index.html", {
+    }
+    try:
+        response = templates.TemplateResponse("index.html", {
             "request": request,
             "tickets": tickets,
             "employee": employee,
             "settings": settings,
             "BASE_URL": BASE_URL
         })
+        logging.debug("Шаблон index.html успешно отрендерен")
+        return response
+    except Exception as e:
+        logging.error(f"Ошибка рендеринга index.html: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: Template Error {str(e)}")
 
 @app.post("/save_settings")
 async def save_settings(
@@ -540,8 +566,7 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
             "assigned_login": employee["login"]
         })
 
-    cursor.execute(
-        """
+    cursor.execute("""
         SELECT m.message_id, m.ticket_id, m.telegram_id, m.text, m.is_from_bot, m.timestamp,
             CASE WHEN m.is_from_bot THEN COALESCE(e2.login, 'Техподдержка') ELSE e.login END AS login,
             a.file_path, a.file_name, a.file_type
@@ -551,25 +576,34 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
         LEFT JOIN attachments a ON m.message_id = a.message_id
         WHERE m.ticket_id = ?
         ORDER BY m.timestamp
-        """,
-        (ticket_id,)
-    )
+    """, (ticket_id,))
+
+    rows = cursor.fetchall()
     astana_tz = pytz.timezone('Asia/Almaty')
-    messages = [
-        {
-            "message_id": row[0],
-            "ticket_id": row[1],
-            "telegram_id": row[2],
-            "text": row[3],
-            "is_from_bot": bool(row[4]),
-            "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
-            "login": row[6],
-            "file_path": row[7],
-            "file_name": row[8],
-            "file_type": row[9]
-        }
-        for row in cursor.fetchall()
-    ]
+
+    messages_dict = {}
+    for row in rows:
+        msg_id = row[0]
+        if msg_id not in messages_dict:
+            messages_dict[msg_id] = {
+                "message_id": row[0],
+                "ticket_id": row[1],
+                "telegram_id": row[2],
+                "text": row[3],
+                "is_from_bot": bool(row[4]),
+                "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
+                "login": row[6],
+                "attachments": []
+            }
+        if row[7]:  # если есть файл
+            messages_dict[msg_id]["attachments"].append({
+                "file_path": row[7],
+                "file_name": row[8],
+                "file_type": row[9]
+            })
+
+    messages = list(messages_dict.values())
+
     cursor.execute(
         """
         SELECT am.message_id, am.ticket_id, am.telegram_id, am.text, am.timestamp, e.login
@@ -1308,23 +1342,33 @@ async def fetch_telegram_history(
             """,
             (fetched_ticket_id,)
         )
-        messages = [
-            {
-                "message_id": row[0],
-                "ticket_id": row[1],
-                "telegram_id": row[2],
-                "text": row[3],  # Убираем префикс [Ticket #]
-                "is_from_bot": bool(row[4]),
-                "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
-                "login": row[6],
-                "file_path": row[7],
-                "file_name": row[8],
-                "file_type": row[9],
-                "is_history": True,  # Добавляем флаг
-                "history_ticket_id": row[1]  # Указываем ID тикета для истории
-            }
-            for row in cursor.fetchall()
-        ]
+        rows = cursor.fetchall()
+
+        # Группируем вложения по message_id
+        messages_dict = {}
+        for row in rows:
+            msg_id = row[0]
+            if msg_id not in messages_dict:
+                messages_dict[msg_id] = {
+                    "message_id": row[0],
+                    "ticket_id": row[1],
+                    "telegram_id": row[2],
+                    "text": row[3],
+                    "is_from_bot": bool(row[4]),
+                    "timestamp": datetime.fromisoformat(row[5]).astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S'),
+                    "login": row[6],
+                    "attachments": [],
+                    "is_history": True,
+                    "history_ticket_id": row[1]
+                }
+            if row[7]:  # есть вложение
+                messages_dict[msg_id]["attachments"].append({
+                    "file_path": row[7],
+                    "file_name": row[8],
+                    "file_type": row[9]
+                })
+
+        messages = list(messages_dict.values())
 
         conn.close()
 
@@ -1337,6 +1381,7 @@ async def fetch_telegram_history(
     except Exception as e:
         logging.error(f"Error fetching history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/employee/{telegram_id}/ratings")
 async def get_employee_ratings(telegram_id: int, employee: dict = Depends(get_current_user)):

@@ -9,6 +9,7 @@
         integrity="sha512-Kc323vGBEqzTmouAECnVceyQqyqdsSiqLQISBL29aUW4U/M7pSPA/gEUZQqv1cwx4OnYxTxve5UMg5GT6L4JJg=="
         crossorigin="anonymous" referrerpolicy="no-referrer" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         .edit-message-btn,
         .delete-message-btn,
@@ -90,11 +91,148 @@
         .message-text-container {
             display: inline-block;
         }
+
+        .main-container {
+            height: calc(100vh - 180px);
+            min-height: 500px;
+        }
+        
+        .chat-area {
+            flex: 1;
+            min-height: 0; /* Важно для правильного flex-scroll */
+        }
+        
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            min-height: 200px;
+        }
+        
+        .quick-replies-container {
+            max-height: 120px;
+            overflow-y: auto;
+        }
+
+        @media (max-width: 768px) {
+            /* Заголовок и кнопки управления */
+            .flex.justify-between.items-center.mb-4 {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .flex.space-x-2 {
+                margin-top: 1rem;
+                flex-wrap: wrap;
+            }
+            .flex.space-x-2 button {
+                margin-bottom: 0.5rem;
+            }
+            /* Панель с типом вопроса и ответственным */
+            .mb-4.flex.space-x-4 {
+                flex-direction: row;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+                align-items: center;
+            }
+            .mb-4.flex.space-x-4 > div {
+                flex: 1;
+                min-width: 45%;
+                margin-bottom: 0;
+            }
+            .mb-4.flex.space-x-4 label {
+                font-size: 0.7rem;
+                margin-right: 0.25rem;
+                white-space: nowrap;
+            }
+            .mb-4.flex.space-x-4 > div:nth-child(2) label::after {
+                content: "Отв.:";
+            }
+            .mb-4.flex.space-x-4 > div:nth-child(2) label span {
+                display: none;
+            }
+            #issue-type-select, 
+            #assign-to-select {
+                font-size: 0.7rem;
+                padding: 0.25rem;
+                height: 2rem;
+            }
+            /* Основной контейнер чатов */
+            .main-container {
+                height: calc(100vh - 220px);
+                flex-direction: column;
+                margin-bottom: 60px;
+            }
+            .chat-column {
+                width: 100%;
+                height: 100%;
+            }
+            /* Управление видимостью разделов */
+            #main-chat-pane,
+            #admin-chat-container,
+            #quick-replies-container {
+                display: none;
+            }
+            #main-chat-pane.active-tab,
+            #admin-chat-container.active-tab {
+                display: flex !important;
+            }
+            #quick-replies-container.active-tab {
+                display: block !important;
+            }
+            /* Нижняя панель навигации */
+            .mobile-tabs {
+                position: fixed !important;
+                bottom: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                background: white;
+                display: flex;
+                justify-content: space-around;
+                padding: 10px;
+                border-top: 1px solid #e5e7eb;
+                height: 50px;
+                z-index: 1000;
+                box-sizing: border-box;
+            }
+            /* Стили для кнопок вкладок */
+            .tab-btn {
+                flex: 1;
+                padding: 8px;
+                text-align: center;
+                border-radius: 5px;
+                font-size: 0.9rem;
+            }
+            .tab-btn.active {
+                background-color: #3b82f6;
+                color: white;
+            }
+            /* Отступ для body */
+            body {
+                padding-bottom: 80px;
+                box-sizing: border-box;
+                min-height: 100vh;
+            }
+            html {
+                height: 100%;
+            }
+        }
+
+        @media (min-width: 769px) {
+            #main-chat-container,
+            #admin-chat-container {
+                display: flex !important;
+            }
+            #quick-replies-container {
+                display: block !important;
+            }
+            .mobile-tabs {
+                display: none !important;
+            }
+        }
     </style>
 </head>
 
-<body class="p-4">
-    <div class="flex justify-between items-center mb-4">
+<body class="p-4 flex flex-col h-screen bg-gray-100">
+    <div class="flex justify-between items-center mb-4 bg-white p-3 rounded-lg shadow">
         <h1 class="text-2xl">Тикет #{{ ticket_id }} ({{ login }})
             {% if is_muted %}
             <span class="text-yellow-500">🔇 Замучен до {{ mute_end_time }}</span>
@@ -145,10 +283,10 @@
             </button>
         </div>
     </div>
-    <div class="mb-4 flex space-x-4">
-        <div>
-            <label class="mr-2">Тип вопроса:</label>
-            <select id="issue-type-select" class="p-2 border rounded">
+    <div class="mb-4 flex space-x-4 bg-white p-3 rounded-lg shadow">
+    <div>
+        <label class="mr-2">Тип вопроса:</label>
+        <select id="issue-type-select" class="p-2 border rounded">
                 <option value="n/a" {% if not issue_type %}selected{% endif %}>n/a</option>
                 <option value="tech" {% if issue_type=='tech' %}selected{% endif %}>tech</option>
                 <option value="org" {% if issue_type=='org' %}selected{% endif %}>org</option>
@@ -156,7 +294,7 @@
             </select>
         </div>
         <div>
-            <label class="mr-2">Ответственный:</label>
+            <label class="mr-2"><span>Ответственный:</span></label>
             <select id="assign-to-select" class="p-2 border rounded">
                 <option value="">Не назначен</option>
                 {% for emp in support_employees %}
@@ -166,51 +304,46 @@
             </select>
         </div>
     </div>
-    <div class="flex space-x-4">
+    <div id="main-chat-container" class="flex flex-col md:flex-row flex-1 gap-4 main-container">
         <!-- Main Chat (75%) -->
-        <div class="w-3/4">
-            <div id="messages" class="border p-4 mb-4 chat-container">
+        <div id="main-chat-pane" class="flex flex-col w-full md:w-3/4 bg-white rounded-lg shadow chat-column">
+            <div id="messages" class="messages-container p-4 space-y-2">
                 {% for message in messages %}
-                <div class="message-container {% if message.is_from_bot %}justify-end{% else %}justify-start{% endif %} mb-2"
-                    id="message-{{ message.message_id }}">
-                    {% if message.is_from_bot %}
-                    <div class="message-actions">
-                        <span class="edit-message-btn cursor-pointer" data-message-id="{{ message.message_id }}"
-                            data-ticket-id="{{ ticket_id }}" data-text="{{ message.text }}" title="Редактировать">
-                            <i class="fas fa-edit"></i>
-                        </span>
-                        <span class="delete-message-btn cursor-pointer ml-1" data-message-id="{{ message.message_id }}"
-                            data-ticket-id="{{ ticket_id }}" title="Удалить">
-                            <i class="fas fa-trash"></i>
-                        </span>
-                    </div>
-                    {% endif %}
+                <div class="message-container {{ 'justify-end' if message.is_from_bot else 'justify-start' }} mb-2" id="message-{{ message.message_id }}">
                     <div class="message-text-container">
-                        <p
-                            class="message-text bg-{% if message.text.startswith('[Тикет #') or message.text.startswith('[Ticket #') %}yellow-200{% else %}{% if message.is_from_bot %}blue-200{% else %}gray-200{% endif %}{% endif %} px-2 rounded whitespace-pre-wrap">
+                        <p class="message-text bg-{{ 'blue-200' if message.is_from_bot else 'gray-200' }} px-2 rounded whitespace-pre-wrap">
                             {{ message.login }}: {{ message.text|safe }}
-                            {% if message.file_type %}
-                            {% if message.file_type == 'image' %}
-                            <img src="/{{ message.file_path }}" alt="{{ message.file_name }}"
-                                class="inline h-16 w-16 cursor-pointer"
-                                onclick="openImageModal('/{{ message.file_path }}')">
-                            {% else %}
-                            <a href="/{{ message.file_path }}" class="inline-block text-blue-500 underline">
-                                {% if message.file_name|length > 20 %}
-                                {{ message.file_name[:17] + '...' }}
-                                {% else %}
-                                {{ message.file_name }}
-                                {% endif %}
-                            </a>
+
+                            {% if message.attachments %}
+                                {% for att in message.attachments %}
+                                    {% if att.file_type == 'image' %}
+                                        <img src="/{{ att.file_path }}" 
+                                            alt="{{ att.file_name }}" 
+                                            class="inline h-16 w-16 cursor-pointer"
+                                            onclick="openImageModal('/{{ att.file_path }}')">
+                                    {% else %}
+                                        <a href="/{{ att.file_path }}" 
+                                        class="inline-block text-blue-500 underline">
+                                            {% if att.file_name|length > 20 %}
+                                                {{ att.file_name[:17] + '...' }}
+                                            {% else %}
+                                                {{ att.file_name }}
+                                            {% endif %}
+                                        </a>
+                                    {% endif %}
+                                {% endfor %}
                             {% endif %}
-                            {% endif %}
+
                             <span class="timestamp text-xs text-gray-500"> ({{ message.timestamp }})</span>
                         </p>
                     </div>
                 </div>
+
+
+
                 {% endfor %}
             </div>
-            <form id="send-message-form" class="flex space-x-2 items-start" enctype="multipart/form-data">
+            <form id="send-message-form" class="p-3 border-t flex items-start gap-2" enctype="multipart/form-data">
                 <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
                 <input type="hidden" name="telegram_id" value="{{ telegram_id }}">
                 <div class="flex-grow">
@@ -237,8 +370,8 @@
             </form>
         </div>
         <!-- Admin Chat (25%) -->
-        <div class="w-1/4">
-            <div id="admin-messages" class="border p-4 mb-4 chat-container">
+        <div id="admin-chat-container" class="flex flex-col w-full md:w-1/4 bg-white rounded-lg shadow chat-column">
+            <div id="admin-messages" class="messages-container p-4 space-y-2">
                 {% for admin_message in admin_messages %}
                 <div class="message-container text-left mb-2">
                     <p class="message-text inline-block bg-green-200 px-2 rounded whitespace-pre-wrap">
@@ -248,7 +381,7 @@
                 </div>
                 {% endfor %}
             </div>
-            <form id="send-admin-message-form" class="flex space-x-2 items-start">
+            <form id="send-admin-message-form" class="p-3 border-t flex items-start gap-2">
                 <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
                 <div class="flex-grow">
                     <textarea name="text" autocomplete="off" id="admin-message-input" placeholder="Внутренний чат ТП"
@@ -265,33 +398,35 @@
     </div>
 
     <!-- Quick Replies -->
-    <div id="quick-replies" class="flex flex-wrap gap-2 mb-4">
-        {% for reply in quick_replies %}
-        <div class="quick-reply-container inline-flex items-center">
-            <button
-                class="bg-{{ reply.color }}-500 text-white px-3 py-1 rounded hover:bg-{{ reply.color }}-600 text-sm quick-reply-btn"
-                data-text="{{ reply.text }}">
-                {{ reply.title }}
-            </button>
-            {% if employee.is_admin %}
-            <form action="/delete_quick_reply" method="post" class="inline ml-1 delete-quick-reply-form"
-                data-quick-reply-id="{{ reply.id }}">
-                <input type="hidden" name="quick_reply_id" value="{{ reply.id }}">
-                <button type="submit" class="delete-quick-reply-btn cursor-pointer" title="Удалить"
-                    data-quick-reply-id="{{ reply.id }}">
-                    <i class="fas fa-times"></i>
+    <div id="quick-replies-container" class="mt-4 bg-white p-3 rounded-lg shadow quick-replies-container">
+        <div id="quick-replies" class="flex flex-wrap gap-2">
+            {% for reply in quick_replies %}
+            <div class="quick-reply-container inline-flex items-center">
+                <button
+                    class="bg-{{ reply.color }}-500 text-white px-3 py-1 rounded hover:bg-{{ reply.color }}-600 text-sm quick-reply-btn"
+                    data-text="{{ reply.text }}">
+                    {{ reply.title }}
                 </button>
-            </form>
+                {% if employee.is_admin %}
+                <form action="/delete_quick_reply" method="post" class="inline ml-1 delete-quick-reply-form"
+                    data-quick-reply-id="{{ reply.id }}">
+                    <input type="hidden" name="quick_reply_id" value="{{ reply.id }}">
+                    <button type="submit" class="delete-quick-reply-btn cursor-pointer" title="Удалить"
+                        data-quick-reply-id="{{ reply.id }}">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% if employee.is_admin %}
+            <button id="add-quick-reply-btn"
+                class="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 text-sm flex items-center"
+                aria-label="Добавить быстрый ответ">
+                <i class="fas fa-plus"></i>
+            </button>
             {% endif %}
         </div>
-        {% endfor %}
-        {% if employee.is_admin %}
-        <button id="add-quick-reply-btn"
-            class="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 text-sm flex items-center"
-            aria-label="Добавить быстрый ответ">
-            <i class="fas fa-plus"></i>
-        </button>
-        {% endif %}
     </div>
 
     <!-- Модальное окно для мута -->
@@ -375,211 +510,226 @@
         </div>
     </div>
 
+    <!-- Мобильные кнопки -->
+    <div class="mobile-tabs md:hidden">
+        <button class="tab-btn active" data-tab="main-chat">Обращение</button>
+        <button class="tab-btn" data-tab="admin-chat">Внутр. Чат</button>
+    </div>
+
     <script>
-    let displayedTicketIds = new Set([{{ ticket_id }}]);
-    let renderedMessageIds = new Set();
+        let displayedTicketIds = new Set([{{ ticket_id }}]);
+        let renderedMessageIds = new Set();
+        
+        function shortenFilename(filename) {
+            if (!filename) return 'unknown';
+            if (filename.length > 20) {
+                return filename.substring(0, 17) + '...';
+            }
+            return filename;
+        }
 
-    function shortenFilename(filename) {
-        if (!filename) return 'unknown';
-        if (filename.length > 20) {
-            return filename.substring(0, 17) + '...';
-        }
-        return filename;
-    }
+        const socket = io(window.BASE_URL, { transports: ['websocket', 'polling'] });
 
-    const socket = io(window.BASE_URL, { transports: ['websocket', 'polling'] });
-    socket.on('connect', () => {
-        console.log('Соединение с Socket.IO установлено');
-    });
+        socket.on('connect', () => {
+            console.log('Соединение с Socket.IO установлено');
+        });
 
-    socket.on('new_message', (data) => {
-        console.log('Новое сообщение:', data);
-        if (data.ticket_id !== {{ ticket_id }} && !data.is_history) {
-            console.log(`Сообщение с ticket_id=${data.ticket_id} проигнорировано, так как текущий ticket_id={{ ticket_id }}`);
-            return;
-        }
-        if (!data.text || (data.message_id && renderedMessageIds.has(data.message_id))) {
-            console.log('Сообщение пустое или уже отрисовано:', data);
-            return;
-        }
-        if (data.message_id) {
-            renderedMessageIds.add(data.message_id);
-        }
-        const messagesDiv = document.getElementById('messages');
-        if (!messagesDiv) {
-            console.error('Элемент #messages не найден');
-            return;
-        }
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `message-container ${data.is_from_bot ? 'justify-end' : 'justify-start'} mb-2`;
-        messageDiv.id = `message-${data.message_id || 'temp-' + Math.random().toString(36).substring(2)}`;
-        const escapeHtml = (str) => {
-            const div = document.createElement('div');
-            div.textContent = str;
-            return div.innerHTML;
-        };
-        const messageContent = `
-            ${data.is_from_bot ? `
-            <div class="message-actions">
-                <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id || ''}" data-ticket-id="${data.ticket_id || ''}" data-text="${escapeHtml(data.text || '')}" title="Редактировать">
-                    <i class="fas fa-edit"></i>
-                </span>
-                <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id || ''}" data-ticket-id="${data.ticket_id || ''}" title="Удалить">
-                    <i class="fas fa-trash"></i>
-                </span>
-            </div>
-            ` : ''}
-            <div class="message-text-container">
-                ${data.is_history ? `
-                <div class="text-xs text-gray-500 mb-1">
-                    Тикет #${data.history_ticket_id}
+        socket.on('new_message', (data) => {
+            console.log('Новое сообщение:', data);
+            if (data.ticket_id !== {{ ticket_id }} && !data.is_history) {
+                console.log(`Сообщение с ticket_id=${data.ticket_id} проигнорировано, так как текущий ticket_id={{ ticket_id }}`);
+                return;
+            }
+            if ((!data.text && (!data.attachments || data.attachments.length === 0))
+                || (data.message_id && renderedMessageIds.has(data.message_id))) {
+                console.log('Сообщение пустое или уже отрисовано:', data);
+                return;
+            }
+
+            if (data.message_id) {
+                renderedMessageIds.add(data.message_id);
+            }
+            const messagesDiv = document.getElementById('messages');
+            if (!messagesDiv) {
+                console.error('Элемент #messages не найден');
+                return;
+            }
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message-container ${data.is_from_bot ? 'justify-end' : 'justify-start'} mb-2`;
+            messageDiv.id = `message-${data.message_id || 'temp-' + Math.random().toString(36).substring(2)}`;
+            const escapeHtml = (str) => {
+                const div = document.createElement('div');
+                div.textContent = str;
+                return div.innerHTML;
+            };
+            const messageContent = `
+                ${data.is_from_bot ? `
+                <div class="message-actions">
+                    <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id || ''}" data-ticket-id="${data.ticket_id || ''}" data-text="${escapeHtml(data.text || '')}" title="Редактировать">
+                        <i class="fas fa-edit"></i>
+                    </span>
+                    <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id || ''}" data-ticket-id="${data.ticket_id || ''}" title="Удалить">
+                        <i class="fas fa-trash"></i>
+                    </span>
                 </div>
                 ` : ''}
-                <p class="message-text bg-${data.is_history ? 'yellow-200' : (data.is_from_bot ? 'blue-200' : 'gray-200')} px-2 rounded whitespace-pre-wrap">
-                    ${escapeHtml(data.login || 'Unknown')}: ${data.text}
-                    ${data.file_type ? `
-                        ${data.file_type === 'image' ? `
-                            <img src="/${escapeHtml(data.file_path || '')}" alt="${escapeHtml(data.file_name || 'image')}" class="inline h-16 w-16 cursor-pointer" onclick="openImageModal('/${escapeHtml(data.file_path || '')}')">
-                        ` : `
-                            <a href="/${escapeHtml(data.file_path || '')}" class="inline-block text-blue-500 underline">${shortenFilename(data.file_name)}</a>
-                        `}
+                <div class="message-text-container">
+                    ${data.is_history ? `
+                    <div class="text-xs text-gray-500 mb-1">
+                        Тикет #${data.history_ticket_id}
+                    </div>
                     ` : ''}
-                    <span class="timestamp text-xs text-gray-500"> (${escapeHtml(data.timestamp || 'N/A')})</span>
-                </p>
-            </div>
-        `;
-        messageDiv.innerHTML = messageContent;
-        if (data.is_history) {
-            console.log('Добавляем сообщение истории в начало:', data.text);
-            messagesDiv.prepend(messageDiv);
-        } else {
-            console.log('Добавляем сообщение в конец:', data.text);
-            messagesDiv.appendChild(messageDiv);
-            const isAtBottom = messagesDiv.scrollTop + messagesDiv.clientHeight >= messagesDiv.scrollHeight - 10;
-            if (isAtBottom) {
-                messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
-            }
-        }
-        if (data.is_history) {
-            displayedTicketIds.add(data.history_ticket_id);
-        }
-        bindMessageActions();
-    });
-
-    socket.on('new_admin_message', (data) => {
-        console.log('Новое сообщение в админ-чате:', data);
-        if (data.ticket_id === {{ ticket_id }}) {
-            const adminMessagesDiv = document.getElementById('admin-messages');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'message-container text-left mb-2';
-            messageDiv.innerHTML = `
-                <p class="message-text inline-block bg-green-200 px-2 rounded whitespace-pre-wrap">
-                    ${data.login || 'Unknown'}: ${data.text}
-                    <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
-                </p>
+                    <p class="message-text bg-${data.is_history ? 'yellow-200' : (data.is_from_bot ? 'blue-200' : 'gray-200')} px-2 rounded whitespace-pre-wrap">
+                        ${escapeHtml(data.login || 'Unknown')}: ${data.text ? escapeHtml(data.text) : ""}
+                        ${data.attachments ? data.attachments.map(att => `
+                            ${att.file_type === 'image' ? `
+                                <img src="/${escapeHtml(att.file_path || '')}"
+                                    alt="${escapeHtml(att.file_name || 'image')}"
+                                    class="inline h-16 w-16 cursor-pointer"
+                                    onclick="openImageModal('/${escapeHtml(att.file_path || '')}')">
+                            ` : `
+                                <a href="/${escapeHtml(att.file_path || '')}"
+                                class="inline-block text-blue-500 underline">
+                                ${shortenFilename(att.file_name)}
+                                </a>
+                            `}
+                        `).join('') : ''}
+                        <span class="timestamp text-xs text-gray-500"> (${escapeHtml(data.timestamp || 'N/A')})</span>
+                    </p>
+                </div>
             `;
-            adminMessagesDiv.appendChild(messageDiv);
-            const isAtBottom = adminMessagesDiv.scrollTop + adminMessagesDiv.clientHeight >= adminMessagesDiv.scrollHeight - 10;
-            if (isAtBottom) {
-                adminMessagesDiv.scrollTo({ top: adminMessagesDiv.scrollHeight, behavior: 'smooth' });
+            messageDiv.innerHTML = messageContent;
+            if (data.is_history) {
+                console.log('Добавляем сообщение истории в начало:', data.text);
+                messagesDiv.prepend(messageDiv);
+            } else {
+                console.log('Добавляем сообщение в конец:', data.text);
+                messagesDiv.appendChild(messageDiv);
+                const isAtBottom = messagesDiv.scrollTop + messagesDiv.clientHeight >= messagesDiv.scrollHeight - 100;
+                if (isAtBottom) {
+                    messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
+                }
             }
-        }
-    });
-
-    socket.on('no_more_history', (data) => {
-        if (data.ticket_id === {{ ticket_id }}) {
-            showNotification('Больше истории нет', 'info');
-            document.getElementById('fetch-history-btn').disabled = true;
-        }
-    });
-
-    socket.on('ticket_assigned', (data) => {
-        if (data.ticket_id === {{ ticket_id }}) {
-            const assignSelect = document.getElementById('assign-to-select');
-            assignSelect.value = data.assigned_to || '';
-        }
-    });
-
-    socket.on('issue_type_updated', (data) => {
-        if (data.ticket_id === {{ ticket_id }}) {
-            const issueTypeSelect = document.getElementById('issue-type-select');
-            issueTypeSelect.value = data.issue_type || 'n/a';
-        }
-    });
-
-    socket.on('ticket_closed', (data) => {
-        if (data.ticket_id === {{ ticket_id }}) {
-            window.location.href = '/';
-        }
-    });
-
-    socket.on('message_deleted', (data) => {
-        if (data.ticket_id === {{ ticket_id }}) {
-            const messageDiv = document.getElementById(`message-${data.message_id}`);
-            if (messageDiv) {
-                messageDiv.remove();
-                showNotification('Сообщение удалено', 'success');
+            if (data.is_history) {
+                displayedTicketIds.add(data.history_ticket_id);
             }
-        }
-    });
+            bindMessageActions();
+        });
 
-    socket.on('message_edited', (data) => {
-        if (data.ticket_id === {{ ticket_id }}) {
-            const messageDiv = document.getElementById(`message-${data.message_id}`);
-            if (messageDiv) {
+        socket.on('new_admin_message', (data) => {
+            console.log('Новое сообщение в админ-чате:', data);
+            if (data.ticket_id === {{ ticket_id }}) {
+                const adminMessagesDiv = document.getElementById('admin-messages');
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message-container text-left mb-2';
                 messageDiv.innerHTML = `
-                    <div class="message-actions">
-                        <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" data-text="${data.text}" title="Редактировать">
-                            <i class="fas fa-edit"></i>
-                        </span>
-                        <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" title="Удалить">
-                            <i class="fas fa-trash"></i>
-                        </span>
-                    </div>
-                    <div class="message-text-container">
-                        <p class="message-text bg-blue-200 px-2 rounded whitespace-pre-wrap">
-                            ${data.login || 'Unknown'}: ${data.text}
-                            <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
-                        </p>
-                    </div>
+                    <p class="message-text inline-block bg-green-200 px-2 rounded whitespace-pre-wrap">
+                        ${data.login || 'Unknown'}: ${data.text}
+                        <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
+                    </p>
                 `;
-                bindMessageActions();
-                showNotification('Сообщение обновлено', 'success');
+                adminMessagesDiv.appendChild(messageDiv);
+                const isAtBottom = adminMessagesDiv.scrollTop + adminMessagesDiv.clientHeight >= adminMessagesDiv.scrollHeight - 100;
+                if (isAtBottom) {
+                    adminMessagesDiv.scrollTo({ top: adminMessagesDiv.scrollHeight, behavior: 'smooth' });
+                }
             }
-        }
-    });
+        });
 
-    socket.on('quick_reply_deleted', (data) => {
-        console.log('Быстрый ответ удалён:', data);
-        const quickReplyContainer = document.querySelector(`.delete-quick-reply-form[data-quick-reply-id="${data.id}"]`)?.closest('.quick-reply-container');
-        if (quickReplyContainer) {
-            quickReplyContainer.remove();
-            showNotification('Быстрый ответ удалён', 'success');
-        }
-    });
+        socket.on('no_more_history', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                showNotification('Больше истории нет', 'info');
+                document.getElementById('fetch-history-btn').disabled = true;
+            }
+        });
 
-    socket.on('quick_reply_added', (data) => {
-        console.log('Быстрый ответ добавлен:', data);
-        const quickRepliesDiv = document.getElementById('quick-replies');
-        const containerDiv = document.createElement('div');
-        containerDiv.className = 'quick-reply-container inline-flex items-center';
-        containerDiv.innerHTML = `
-            <button class="bg-${data.color}-500 text-white px-3 py-1 rounded hover:bg-${data.color}-600 text-sm quick-reply-btn" data-text="${data.text}">
-                ${data.title}
-            </button>
-            {% if employee.is_admin %}
-            <form action="/delete_quick_reply" method="post" class="inline ml-1 delete-quick-reply-form" data-quick-reply-id="${data.id}">
-                <input type="hidden" name="quick_reply_id" value="${data.id}">
-                <button type="submit" class="delete-quick-reply-btn cursor-pointer" title="Удалить" data-quick-reply-id="${data.id}">
-                    <i class="fas fa-times"></i>
+        socket.on('ticket_assigned', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                const assignSelect = document.getElementById('assign-to-select');
+                assignSelect.value = data.assigned_to || '';
+            }
+        });
+
+        socket.on('issue_type_updated', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                const issueTypeSelect = document.getElementById('issue-type-select');
+                issueTypeSelect.value = data.issue_type || 'n/a';
+            }
+        });
+
+        socket.on('ticket_closed', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                window.location.href = '/';
+            }
+        });
+
+        socket.on('message_deleted', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                const messageDiv = document.getElementById(`message-${data.message_id}`);
+                if (messageDiv) {
+                    messageDiv.remove();
+                    showNotification('Сообщение удалено', 'success');
+                }
+            }
+        });
+
+        socket.on('message_edited', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                const messageDiv = document.getElementById(`message-${data.message_id}`);
+                if (messageDiv) {
+                    messageDiv.innerHTML = `
+                        <div class="message-actions">
+                            <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" data-text="${data.text}" title="Редактировать">
+                                <i class="fas fa-edit"></i>
+                            </span>
+                            <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" title="Удалить">
+                                <i class="fas fa-trash"></i>
+                            </span>
+                        </div>
+                        <div class="message-text-container">
+                            <p class="message-text bg-blue-200 px-2 rounded whitespace-pre-wrap">
+                                ${data.login || 'Unknown'}: ${data.text}
+                                <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
+                            </p>
+                        </div>
+                    `;
+                    bindMessageActions();
+                    showNotification('Сообщение обновлено', 'success');
+                }
+            }
+        });
+
+        socket.on('quick_reply_deleted', (data) => {
+            console.log('Быстрый ответ удалён:', data);
+            const quickReplyContainer = document.querySelector(`.delete-quick-reply-form[data-quick-reply-id="${data.id}"]`)?.closest('.quick-reply-container');
+            if (quickReplyContainer) {
+                quickReplyContainer.remove();
+                showNotification('Быстрый ответ удалён', 'success');
+            }
+        });
+
+        socket.on('quick_reply_added', (data) => {
+            console.log('Быстрый ответ добавлен:', data);
+            const quickRepliesDiv = document.getElementById('quick-replies');
+            const containerDiv = document.createElement('div');
+            containerDiv.className = 'quick-reply-container inline-flex items-center';
+            containerDiv.innerHTML = `
+                <button class="bg-${data.color}-500 text-white px-3 py-1 rounded hover:bg-${data.color}-600 text-sm quick-reply-btn" data-text="${data.text}">
+                    ${data.title}
                 </button>
-            </form>
-            {% endif %}
-        `;
-        quickRepliesDiv.insertBefore(containerDiv, quickRepliesDiv.lastElementChild);
-        bindMessageActions();
-        showNotification('Быстрый ответ добавлен', 'success');
-    });
+                {% if employee.is_admin %}
+                <form action="/delete_quick_reply" method="post" class="inline ml-1 delete-quick-reply-form" data-quick-reply-id="${data.id}">
+                    <input type="hidden" name="quick_reply_id" value="${data.id}">
+                    <button type="submit" class="delete-quick-reply-btn cursor-pointer" title="Удалить" data-quick-reply-id="${data.id}">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </form>
+                {% endif %}
+            `;
+            quickRepliesDiv.insertBefore(containerDiv, quickRepliesDiv.lastElementChild);
+            bindMessageActions();
+            showNotification('Быстрый ответ добавлен', 'success');
+        });
 
         function showNotification(message, type) {
             const notification = document.createElement('div');
@@ -673,7 +823,9 @@
 
         function handleQuickReplyClick() {
             const text = this.dataset.text;
-            document.getElementById('message-input').value = text;
+            const messageInput = document.getElementById('message-input');
+            messageInput.value = text;
+            messageInput.focus();
         }
 
         function sendMessage(form) {
@@ -693,7 +845,7 @@
                     if (data.status === 'ok') {
                         form.reset();
                         const messagesDiv = document.getElementById('messages');
-                        messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
+                        if (messagesDiv) messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
                     } else {
                         showNotification('Ошибка отправки сообщения: ' + data.message, 'error');
                     }
@@ -718,7 +870,7 @@
                     if (data.status === 'ok') {
                         form.reset();
                         const adminMessagesDiv = document.getElementById('admin-messages');
-                        adminMessagesDiv.scrollTo({ top: adminMessagesDiv.scrollHeight, behavior: 'smooth' });
+                        if (adminMessagesDiv) adminMessagesDiv.scrollTo({ top: adminMessagesDiv.scrollHeight, behavior: 'smooth' });
                     } else {
                         showNotification('Ошибка отправки сообщения в админ-чат: ' + data.message, 'error');
                     }
@@ -752,7 +904,6 @@
                     } else if (data.status === 'ok') {
                         console.log(`История подтянута из тикета #${data.fetched_ticket_ids[0]}, сообщений: ${data.messages_count}`);
                         showNotification(`Подтянута история из тикета #${data.fetched_ticket_ids[0]}`, 'success');
-                        // Добавляем новые тикеты в displayedTicketIds
                         data.fetched_ticket_ids.forEach(tid => displayedTicketIds.add(tid));
                     } else {
                         showNotification('Ошибка подтягивания истории: ' + data.message, 'error');
@@ -768,113 +919,6 @@
                 });
         }
 
-        document.getElementById('send-message-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            sendMessage(e.target);
-        });
-
-        document.getElementById('send-admin-message-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            sendAdminMessage(e.target);
-        });
-
-        document.getElementById('admin-message-input').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                const form = document.getElementById('send-admin-message-form');
-                sendAdminMessage(form);
-            }
-        });
-
-        document.getElementById('message-input').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                const form = document.getElementById('send-message-form');
-                sendMessage(form);
-            }
-        });
-
-        document.getElementById('close-ticket-btn').addEventListener('click', async () => {
-            const formData = new FormData();
-            formData.append('ticket_id', '{{ ticket_id }}');
-            try {
-                console.log(`Отправка запроса на закрытие тикета #{{ ticket_id }}`);
-                const response = await fetch('/close_ticket', {
-                    method: 'POST',
-                    body: formData
-                });
-                console.log(`Ответ от /close_ticket: статус ${response.status}`);
-                if (!response.ok) {
-                    throw new Error(`HTTP ошибка: ${response.status}`);
-                }
-                const data = await response.json();
-                console.log('Данные ответа:', data);
-                if (data.status === 'ok') {
-                    console.log('Тикет успешно закрыт, редирект на /');
-                    window.location.href = '/';
-                } else {
-                    showNotification(`Ошибка закрытия тикета: ${data.message || 'Неизвестная ошибка'}`, 'error');
-                }
-            } catch (error) {
-                console.error('Ошибка при закрытии тикета:', error);
-                showNotification('Ошибка закрытия тикета: не удалось выполнить запрос', 'error');
-            }
-        });
-
-        document.getElementById('edit-message-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            fetch('/edit_message', {
-                method: 'POST',
-                body: formData
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'ok') {
-                        closeModal('editMessageModal');
-                    } else {
-                        showNotification('Ошибка редактирования сообщения: ' + data.detail, 'error');
-                    }
-                })
-                .catch(error => {
-                    showNotification('Ошибка редактирования сообщения', 'error');
-                });
-        });
-
-        document.getElementById('issue-type-select').addEventListener('change', (e) => {
-            const formData = new FormData();
-            formData.append('ticket_id', '{{ ticket_id }}');
-            formData.append('issue_type', e.target.value);
-            fetch('/update_issue_type', {
-                method: 'POST',
-                body: formData
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status !== 'ok') {
-                        showNotification('Ошибка обновления типа тикета: ' + data.message, 'error');
-                    }
-                })
-                .catch(error => showNotification('Ошибка обновления типа тикета', 'error'));
-        });
-
-        document.getElementById('assign-to-select').addEventListener('change', (e) => {
-            const formData = new FormData();
-            formData.append('ticket_id', '{{ ticket_id }}');
-            formData.append('assigned_to', e.target.value);
-            fetch('/assign_ticket', {
-                method: 'POST',
-                body: formData
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status !== 'ok') {
-                        showNotification('Ошибка назначения тикета: ' + data.message, 'error');
-                    }
-                })
-                .catch(error => showNotification('Ошибка назначения тикета', 'error'));
-        });
-
         function openModal(modalId) {
             document.getElementById(modalId).style.display = 'block';
         }
@@ -882,120 +926,6 @@
         function closeModal(modalId) {
             document.getElementById(modalId).style.display = 'none';
         }
-
-        document.getElementById('mute-btn').addEventListener('click', () => openModal('muteModal'));
-        document.getElementById('ban-btn').addEventListener('click', () => openModal('banModal'));
-        document.getElementById('add-quick-reply-btn').addEventListener('click', () => openModal('addQuickReplyModal'));
-
-        document.getElementById('mute-form-modal').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            formData.append('ticket_id', '{{ ticket_id }}');
-            formData.append('telegram_id', '{{ telegram_id }}');
-            fetch('/mute_user', {
-                method: 'POST',
-                body: formData
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'ok') {
-                        showNotification('Пользователь замучен', 'success');
-                        closeModal('muteModal');
-                        location.reload();
-                    } else {
-                        showNotification('Ошибка: ' + data.message, 'error');
-                    }
-                })
-                .catch(error => showNotification('Ошибка мута пользователя', 'error'));
-        });
-
-        document.getElementById('ban-form-modal').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            formData.append('ticket_id', '{{ ticket_id }}');
-            formData.append('telegram_id', '{{ telegram_id }}');
-            if (formData.get('permanent') === 'on') {
-                formData.delete('ban_duration');
-            }
-            fetch('/ban_user', {
-                method: 'POST',
-                body: formData
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'ok') {
-                        showNotification('Пользователь забанен', 'success');
-                        closeModal('banModal');
-                        location.reload();
-                    } else {
-                        showNotification('Ошибка: ' + data.message, 'error');
-                    }
-                })
-                .catch(error => showNotification('Ошибка бана пользователя', 'error'));
-        });
-
-        document.getElementById('add-quick-reply-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            fetch('/add_quick_reply', {
-                method: 'POST',
-                body: formData
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'ok') {
-                        closeModal('addQuickReplyModal');
-                        document.getElementById('add-quick-reply-form').reset();
-                    } else {
-                        showNotification('Ошибка добавления быстрого ответа: ' + data.detail, 'error');
-                    }
-                })
-                .catch(error => {
-                    showNotification('Ошибка добавления быстрого ответа', 'error');
-                });
-        });
-
-        {% if is_muted %}
-        document.getElementById('unmute-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            fetch('/unmute_user', {
-                method: 'POST',
-                body: formData
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'ok') {
-                        showNotification('Мут снят', 'success');
-                        location.reload();
-                    } else {
-                        showNotification('Ошибка: ' + data.message, 'error');
-                    }
-                })
-                .catch(error => showNotification('Ошибка снятия мута', 'error'));
-        });
-        {% endif %}
-
-        {% if is_banned %}
-        document.getElementById('unban-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            fetch('/unban_user', {
-                method: 'POST',
-                body: formData
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'ok') {
-                        showNotification('Бан снят', 'success');
-                        location.reload();
-                    } else {
-                        showNotification('Ошибка: ' + data.message, 'error');
-                    }
-                })
-                .catch(error => showNotification('Ошибка снятия бана', 'error'));
-        });
-        {% endif %}
 
         function openImageModal(src) {
             const modal = document.getElementById('imageModal');
@@ -1008,87 +938,334 @@
             const modal = document.getElementById('imageModal');
             modal.classList.add('hidden');
         }
+        
+        // Mobile Tab Switcher Function
+        function switchMobileTab(tabName) {
+            const mainChatPane = document.getElementById('main-chat-pane');
+            const adminChatPane = document.getElementById('admin-chat-container');
+            const quickReplies = document.getElementById('quick-replies-container');
+            const tabBtns = document.querySelectorAll('.tab-btn');
 
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                closeImageModal();
+            // Удаляем активный класс со всех кнопок и панелей
+            tabBtns.forEach(btn => btn.classList.remove('active'));
+            mainChatPane.classList.remove('active-tab');
+            adminChatPane.classList.remove('active-tab');
+            quickReplies.classList.remove('active-tab');
+
+            // Добавляем активный класс к выбранной кнопке и панели
+            if (tabName === 'main-chat') {
+                document.querySelector('.tab-btn[data-tab="main-chat"]').classList.add('active');
+                mainChatPane.classList.add('active-tab');
+                quickReplies.classList.add('active-tab');
+            } else if (tabName === 'admin-chat') {
+                document.querySelector('.tab-btn[data-tab="admin-chat"]').classList.add('active');
+                adminChatPane.classList.add('active-tab');
             }
-        });
-
-        document.getElementById('message-input').addEventListener('paste', async (e) => {
-            const clipboardData = e.clipboardData || e.originalEvent.clipboardData;
-            const items = clipboardData.items;
-
-            // Проверяем, есть ли изображение в буфере обмена
-            for (const item of items) {
-                if (item.type.startsWith('image/')) {
-                    e.preventDefault(); // Блокируем стандартную вставку только для изображений
-                    const file = item.getAsFile();
-                    const formData = new FormData();
-                    formData.append('ticket_id', '{{ ticket_id }}');
-                    formData.append('telegram_id', '{{ telegram_id }}');
-                    const inputText = document.getElementById('message-input').value;
-                    formData.append('text', inputText);
-                    formData.append('file', file, `screenshot-${Date.now()}.png`);
-                    formData.append('issue_type', document.getElementById('issue-type-select').value);
-                    try {
-                        const response = await fetch('/send_message', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        const data = await response.json();
-                        if (data.status === 'ok') {
-                            document.getElementById('send-message-form').reset();
-                        } else {
-                            showNotification('Не удалось отправить изображение: ' + data.message, 'error');
-                        }
-                    } catch (error) {
-                        showNotification('Не удалось отправить изображение', 'error');
-                    }
-                    return; // Прерываем обработку после отправки изображения
-                }
-            }
-
-            // Если нет изображения, вставляем текст из буфера обмена
-            const text = clipboardData.getData('text/plain');
-            if (text) {
-                const textarea = document.getElementById('message-input');
-                const start = textarea.selectionStart;
-                const end = textarea.selectionEnd;
-                textarea.value = textarea.value.substring(0, start) + text + textarea.value.substring(end);
-                textarea.selectionStart = textarea.selectionEnd = start + text.length;
-                textarea.dispatchEvent(new Event('input')); // Триггерим событие input для авторесайза
-            }
-        });
-
-        window.addEventListener('load', () => {
+        }
+        
+        // Use a single DOMContentLoaded event listener
+        document.addEventListener('DOMContentLoaded', () => {
             const messagesDiv = document.getElementById('messages');
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
             const adminMessagesDiv = document.getElementById('admin-messages');
-            adminMessagesDiv.scrollTop = adminMessagesDiv.scrollHeight;
+
+            // Initial scroll to bottom
+            if (messagesDiv) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            if (adminMessagesDiv) adminMessagesDiv.scrollTop = adminMessagesDiv.scrollHeight;
+
+            // Initialize mobile tabs on page load
+            if (window.innerWidth <= 768) {
+                switchMobileTab('main-chat');
+            }
+
+            // Bind event listeners to buttons and forms
+            document.getElementById('send-message-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                sendMessage(e.target);
+            });
+
+            document.getElementById('send-admin-message-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                sendAdminMessage(e.target);
+            });
+
+            document.getElementById('admin-message-input').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    const form = document.getElementById('send-admin-message-form');
+                    sendAdminMessage(form);
+                }
+            });
+
+            document.getElementById('message-input').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    const form = document.getElementById('send-message-form');
+                    sendMessage(form);
+                }
+            });
+
+            document.getElementById('close-ticket-btn').addEventListener('click', async () => {
+                const formData = new FormData();
+                formData.append('ticket_id', '{{ ticket_id }}');
+                try {
+                    console.log(`Отправка запроса на закрытие тикета #{{ ticket_id }}`);
+                    const response = await fetch('/close_ticket', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    console.log(`Ответ от /close_ticket: статус ${response.status}`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ошибка: ${response.status}`);
+                    }
+                    const data = await response.json();
+                    console.log('Данные ответа:', data);
+                    if (data.status === 'ok') {
+                        console.log('Тикет успешно закрыт, редирект на /');
+                        window.location.href = '/';
+                    } else {
+                        showNotification(`Ошибка закрытия тикета: ${data.message || 'Неизвестная ошибка'}`, 'error');
+                    }
+                } catch (error) {
+                    console.error('Ошибка при закрытии тикета:', error);
+                    showNotification('Ошибка закрытия тикета: не удалось выполнить запрос', 'error');
+                }
+            });
+
+            document.getElementById('edit-message-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                fetch('/edit_message', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'ok') {
+                            closeModal('editMessageModal');
+                        } else {
+                            showNotification('Ошибка редактирования сообщения: ' + data.detail, 'error');
+                        }
+                    })
+                    .catch(error => {
+                        showNotification('Ошибка редактирования сообщения', 'error');
+                    });
+            });
+
+            document.getElementById('issue-type-select').addEventListener('change', (e) => {
+                const formData = new FormData();
+                formData.append('ticket_id', '{{ ticket_id }}');
+                formData.append('issue_type', e.target.value);
+                fetch('/update_issue_type', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status !== 'ok') {
+                            showNotification('Ошибка обновления типа тикета: ' + data.message, 'error');
+                        }
+                    })
+                    .catch(error => showNotification('Ошибка обновления типа тикета', 'error'));
+            });
+
+            document.getElementById('assign-to-select').addEventListener('change', (e) => {
+                const formData = new FormData();
+                formData.append('ticket_id', '{{ ticket_id }}');
+                formData.append('assigned_to', e.target.value);
+                fetch('/assign_ticket', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status !== 'ok') {
+                            showNotification('Ошибка назначения тикета: ' + data.message, 'error');
+                        }
+                    })
+                    .catch(error => showNotification('Ошибка назначения тикета', 'error'));
+            });
+
+            document.getElementById('mute-btn').addEventListener('click', () => openModal('muteModal'));
+            document.getElementById('ban-btn').addEventListener('click', () => openModal('banModal'));
+            document.getElementById('add-quick-reply-btn').addEventListener('click', () => openModal('addQuickReplyModal'));
+
+            document.getElementById('mute-form-modal').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                formData.append('ticket_id', '{{ ticket_id }}');
+                formData.append('telegram_id', '{{ telegram_id }}');
+                fetch('/mute_user', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'ok') {
+                            showNotification('Пользователь замучен', 'success');
+                            closeModal('muteModal');
+                            location.reload();
+                        } else {
+                            showNotification('Ошибка: ' + data.message, 'error');
+                        }
+                    })
+                    .catch(error => showNotification('Ошибка мута пользователя', 'error'));
+            });
+
+            document.getElementById('ban-form-modal').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                formData.append('ticket_id', '{{ ticket_id }}');
+                formData.append('telegram_id', '{{ telegram_id }}');
+                if (formData.get('permanent') === 'on') {
+                    formData.delete('ban_duration');
+                }
+                fetch('/ban_user', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'ok') {
+                            showNotification('Пользователь забанен', 'success');
+                            closeModal('banModal');
+                            location.reload();
+                        } else {
+                            showNotification('Ошибка: ' + data.message, 'error');
+                        }
+                    })
+                    .catch(error => showNotification('Ошибка бана пользователя', 'error'));
+            });
+
+            document.getElementById('add-quick-reply-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                fetch('/add_quick_reply', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'ok') {
+                            closeModal('addQuickReplyModal');
+                            document.getElementById('add-quick-reply-form').reset();
+                        } else {
+                            showNotification('Ошибка добавления быстрого ответа: ' + data.detail, 'error');
+                        }
+                    })
+                    .catch(error => {
+                        showNotification('Ошибка добавления быстрого ответа', 'error');
+                    });
+            });
+
+            {% if is_muted %}
+            document.getElementById('unmute-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                fetch('/unmute_user', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'ok') {
+                            showNotification('Мут снят', 'success');
+                            location.reload();
+                        } else {
+                            showNotification('Ошибка: ' + data.message, 'error');
+                        }
+                    })
+                    .catch(error => showNotification('Ошибка снятия мута', 'error'));
+            });
+            {% endif %}
+
+            {% if is_banned %}
+            document.getElementById('unban-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                fetch('/unban_user', {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'ok') {
+                            showNotification('Бан снят', 'success');
+                            location.reload();
+                        } else {
+                            showNotification('Ошибка: ' + data.message, 'error');
+                        }
+                    })
+                    .catch(error => showNotification('Ошибка снятия бана', 'error'));
+            });
+            {% endif %}
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    closeImageModal();
+                }
+            });
+
+            document.getElementById('message-input').addEventListener('paste', async (e) => {
+                const clipboardData = e.clipboardData || e.originalEvent.clipboardData;
+                const items = clipboardData.items;
+
+                for (const item of items) {
+                    if (item.type.startsWith('image/')) {
+                        e.preventDefault();
+                        const file = item.getAsFile();
+                        const formData = new FormData();
+                        formData.append('ticket_id', '{{ ticket_id }}');
+                        formData.append('telegram_id', '{{ telegram_id }}');
+                        const inputText = document.getElementById('message-input').value;
+                        formData.append('text', inputText);
+                        formData.append('file', file, `screenshot-${Date.now()}.png`);
+                        formData.append('issue_type', document.getElementById('issue-type-select').value);
+                        try {
+                            const response = await fetch('/send_message', {
+                                method: 'POST',
+                                body: formData
+                            });
+                            const data = await response.json();
+                            if (data.status === 'ok') {
+                                document.getElementById('send-message-form').reset();
+                            } else {
+                                showNotification('Не удалось отправить изображение: ' + data.message, 'error');
+                            }
+                        } catch (error) {
+                            showNotification('Не удалось отправить изображение', 'error');
+                        }
+                        return;
+                    }
+                }
+            });
+
+            document.getElementById('attach-file-btn').addEventListener('click', () => {
+                document.getElementById('file-input').click();
+            });
+
+            document.getElementById('fetch-history-btn').addEventListener('click', () => {
+                fetchHistory();
+            });
+
             bindMessageActions();
-            displayedTicketIds = new Set([{{ ticket_id }}]);
-        renderedMessageIds.clear(); // Сбрасываем при загрузке страницы
-    });
 
-        const textarea = document.getElementById('message-input');
-        textarea.addEventListener('input', () => {
-            textarea.style.height = 'auto';
-            textarea.style.height = `${Math.min(textarea.scrollHeight, 100)}px`;
-        });
+            // Handle mobile tab clicks
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    if (window.innerWidth <= 768) {
+                        const tab = this.dataset.tab;
+                        switchMobileTab(tab);
+                    }
+                });
+            });
 
-        const adminTextarea = document.getElementById('admin-message-input');
-        adminTextarea.addEventListener('input', () => {
-            adminTextarea.style.height = 'auto';
-            adminTextarea.style.height = `${Math.min(adminTextarea.scrollHeight, 100)}px`;
-        });
-
-        document.getElementById('attach-file-btn').addEventListener('click', () => {
-            document.getElementById('file-input').click();
-        });
-
-        document.getElementById('fetch-history-btn').addEventListener('click', () => {
-            fetchHistory();
+            const textareas = document.querySelectorAll('textarea');
+            textareas.forEach(textarea => {
+                textarea.addEventListener('input', () => {
+                    textarea.style.height = 'auto';
+                    textarea.style.height = `${Math.min(textarea.scrollHeight, 100)}px`;
+                });
+            });
         });
     </script>
     <script>(function () { function c() { var b = a.contentDocument || a.contentWindow.document; if (b) { var d = b.createElement('script'); d.innerHTML = "window.__CF$cv$params={r:'9513530baddfbca3',t:'MTc1MDE3MTQ2MC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);"; b.getElementsByTagName('head')[0].appendChild(d) } } if (document.body) { var a = document.createElement('iframe'); a.height = 1; a.width = 1; a.style.position = 'absolute'; a.style.top = 0; a.style.left = 0; a.style.border = 'none'; a.style.visibility = 'hidden'; document.body.appendChild(a); if ('loading' !== document.readyState) c(); else if (window.addEventListener) document.addEventListener('DOMContentLoaded', c); else { var e = document.onreadystatechange || function () { }; document.onreadystatechange = function (b) { e(b); 'loading' !== document.readyState && (document.onreadystatechange = e, c()) } } } })();</script>
