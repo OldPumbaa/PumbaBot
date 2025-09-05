@@ -214,6 +214,24 @@
             html {
                 height: 100%;
             }
+
+            .tab-content {
+                display: none;
+            }
+            .tab-content.active {
+                display: block;
+            }
+            .quick-replies {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+            #message-input {
+                display: none; /* Скрываем input при переключении на другие вкладки, но для appeal показываем */
+            }
+            #tab-appeal.active #message-input {
+                display: block;
+            }
         }
 
         @media (min-width: 769px) {
@@ -399,33 +417,35 @@
 
     <!-- Quick Replies -->
     <div id="quick-replies-container" class="mt-4 bg-white p-3 rounded-lg shadow quick-replies-container">
-        <div id="quick-replies" class="flex flex-wrap gap-2">
-            {% for reply in quick_replies %}
-            <div class="quick-reply-container inline-flex items-center">
-                <button
-                    class="bg-{{ reply.color }}-500 text-white px-3 py-1 rounded hover:bg-{{ reply.color }}-600 text-sm quick-reply-btn"
-                    data-text="{{ reply.text }}">
-                    {{ reply.title }}
-                </button>
-                {% if employee.is_admin %}
-                <form action="/delete_quick_reply" method="post" class="inline ml-1 delete-quick-reply-form"
-                    data-quick-reply-id="{{ reply.id }}">
-                    <input type="hidden" name="quick_reply_id" value="{{ reply.id }}">
-                    <button type="submit" class="delete-quick-reply-btn cursor-pointer" title="Удалить"
-                        data-quick-reply-id="{{ reply.id }}">
-                        <i class="fas fa-times"></i>
+        <div class="tab-content" id="tab-quick-replies" style="display: none;"></div>
+            <div id="quick-replies" class="flex flex-wrap gap-2">
+                {% for reply in quick_replies %}
+                <div class="quick-reply-container inline-flex items-center">
+                    <button
+                        class="bg-{{ reply.color }}-500 text-white px-3 py-1 rounded hover:bg-{{ reply.color }}-600 text-sm quick-reply-btn"
+                        data-text="{{ reply.text }}">
+                        {{ reply.title }}
                     </button>
-                </form>
+                    {% if employee.is_admin %}
+                    <form action="/delete_quick_reply" method="post" class="inline ml-1 delete-quick-reply-form"
+                        data-quick-reply-id="{{ reply.id }}">
+                        <input type="hidden" name="quick_reply_id" value="{{ reply.id }}">
+                        <button type="submit" class="delete-quick-reply-btn cursor-pointer" title="Удалить"
+                            data-quick-reply-id="{{ reply.id }}">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                {% if employee.is_admin %}
+                <button id="add-quick-reply-btn"
+                    class="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 text-sm flex items-center"
+                    aria-label="Добавить быстрый ответ">
+                    <i class="fas fa-plus"></i>
+                </button>
                 {% endif %}
             </div>
-            {% endfor %}
-            {% if employee.is_admin %}
-            <button id="add-quick-reply-btn"
-                class="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 text-sm flex items-center"
-                aria-label="Добавить быстрый ответ">
-                <i class="fas fa-plus"></i>
-            </button>
-            {% endif %}
         </div>
     </div>
 
@@ -514,6 +534,7 @@
     <div class="mobile-tabs md:hidden">
         <button class="tab-btn active" data-tab="main-chat">Обращение</button>
         <button class="tab-btn" data-tab="admin-chat">Внутр. Чат</button>
+        <button class="tab-button" data-tab="quick-replies">Быстр.Отв.</button>
     </div>
 
     <script>
@@ -708,6 +729,22 @@
             }
         });
 
+        document.querySelectorAll('.quick-reply').forEach(button => {
+            button.addEventListener('click', function() {
+                const text = this.dataset.text;
+                const input = document.getElementById('message-input');
+                
+                // Если на мобильном и вкладка не appeal, переключить на appeal
+                if (window.innerWidth < 768 && !document.getElementById('tab-appeal').classList.contains('active')) {
+                    switchTab('appeal'); // Вызов функции переключения вкладок
+                }
+                
+                // Вставить текст в input
+                input.value = text;
+                input.focus(); // Фокус на input для редактирования
+            });
+        });
+
         socket.on('quick_reply_added', (data) => {
             console.log('Быстрый ответ добавлен:', data);
             const quickRepliesDiv = document.getElementById('quick-replies');
@@ -826,6 +863,9 @@
             const messageInput = document.getElementById('message-input');
             messageInput.value = text;
             messageInput.focus();
+            if (window.innerWidth <= 768) {
+                switchMobileTab('main-chat'); // Переключаемся на вкладку "Обращение" для мобильных
+            }
         }
 
         function sendMessage(form) {
@@ -956,10 +996,12 @@
             if (tabName === 'main-chat') {
                 document.querySelector('.tab-btn[data-tab="main-chat"]').classList.add('active');
                 mainChatPane.classList.add('active-tab');
-                quickReplies.classList.add('active-tab');
             } else if (tabName === 'admin-chat') {
                 document.querySelector('.tab-btn[data-tab="admin-chat"]').classList.add('active');
                 adminChatPane.classList.add('active-tab');
+            } else if (tabName === 'quick-replies') {
+                document.querySelector('.tab-btn[data-tab="quick-replies"]').classList.add('active');
+                quickReplies.classList.add('active-tab');
             }
         }
         
