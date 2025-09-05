@@ -113,6 +113,19 @@
             overflow-y: auto;
         }
 
+        .mobile-tabs .fa-comment-dots {
+            font-size: 1.5rem;
+            vertical-align: middle;
+        }
+
+        /* Стили для модального окна */
+        #mobileQuickRepliesModal .modal-dialog {
+            max-width: 90%; /* Удобная ширина для мобильных */
+        }
+        #mobileQuickRepliesModal .btn-block {
+            width: 100%; /* Кнопки на всю ширину */
+        }
+
         @media (max-width: 768px) {
             /* Заголовок и кнопки управления */
             .flex.justify-between.items-center.mb-4 {
@@ -171,12 +184,21 @@
             #quick-replies-container {
                 display: none;
             }
-            #main-chat-pane.active-tab,
+            #main-chat-pane.active-tab {
+                display: flex !important; /* Показываем панель чата обращения */
+            }
             #admin-chat-container.active-tab {
                 display: flex !important;
             }
             #quick-replies-container.active-tab {
                 display: block !important;
+            }
+            /* Поле ввода сообщения */
+            #message-input {
+                display: none; /* Скрываем по умолчанию */
+            }
+            #main-chat-pane.active-tab #message-input {
+                display: block; /* Показываем на вкладке "Обращение" */
             }
             /* Нижняя панель навигации */
             .mobile-tabs {
@@ -186,16 +208,15 @@
                 right: 0 !important;
                 background: white;
                 display: flex;
-                justify-content: space-around;
+                align-items: center;
                 padding: 10px;
                 border-top: 1px solid #e5e7eb;
                 height: 50px;
                 z-index: 1000;
                 box-sizing: border-box;
             }
-            /* Стили для кнопок вкладок */
             .tab-btn {
-                flex: 1;
+                flex-grow: 1;
                 padding: 8px;
                 text-align: center;
                 border-radius: 5px;
@@ -204,6 +225,14 @@
             .tab-btn.active {
                 background-color: #3b82f6;
                 color: white;
+            }
+            .tab-btn.quick-replies-btn {
+                flex-grow: 0;
+                flex-basis: 50px;
+                padding: 8px;
+                display: flex;
+                justify-content: center;
+                align-items: center;
             }
             /* Отступ для body */
             body {
@@ -214,7 +243,6 @@
             html {
                 height: 100%;
             }
-
             .tab-content {
                 display: none;
             }
@@ -226,11 +254,8 @@
                 flex-wrap: wrap;
                 gap: 10px;
             }
-            #message-input {
-                display: none; /* Скрываем input при переключении на другие вкладки, но для appeal показываем */
-            }
-            #tab-appeal.active #message-input {
-                display: block;
+            .quick-replies.tab-content {
+                display: none; /* Скрываем десктопный блок на мобильных */
             }
         }
 
@@ -245,6 +270,17 @@
             .mobile-tabs {
                 display: none !important;
             }
+        }
+
+        /* В конец твоего <style> */
+        #mobileQuickRepliesModal .modal-content {
+            width: 90%;
+            max-width: 400px;
+            margin: 15% auto;
+        }
+
+        #mobileQuickRepliesModal .modal {
+            z-index: 1000; /* Выше остальных элементов */
         }
     </style>
 </head>
@@ -530,11 +566,37 @@
         </div>
     </div>
 
-    <!-- Мобильные кнопки -->
+    <!-- Модальное окно для мобильных быстрых ответов -->
+    <div id="mobileQuickRepliesModal" class="modal">
+        <div class="modal-content bg-white rounded-lg shadow-lg">
+            <div class="flex justify-between items-center p-4 border-b">
+                <h5 class="text-lg font-semibold">Быстрые ответы</h5>
+                <button class="close text-gray-500 hover:text-black" onclick="closeModal('mobileQuickRepliesModal')" aria-label="Закрыть">
+                    <span>&times;</span>
+                </button>
+            </div>
+            <div class="p-4">
+                {% for reply in quick_replies %}
+                <div class="quick-reply mb-2">
+                    <button class="bg-{{ reply.color }}-500 text-white w-full py-2 rounded hover:bg-{{ reply.color }}-600" onclick="sendQuickReply('{{ reply.id }}', '{{ reply.text }}')">{{ reply.title }}</button>
+                </div>
+                {% endfor %}
+                {% if employee.is_admin %}
+                <button class="bg-blue-500 text-white w-full py-2 rounded hover:bg-blue-600 mt-3" onclick="openModal('addQuickReplyModal')">Добавить</button>
+                {% endif %}
+            </div>
+            <div class="p-4 border-t">
+                <button class="bg-gray-500 text-white w-full py-2 rounded hover:bg-gray-600" onclick="closeModal('mobileQuickRepliesModal')">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
     <div class="mobile-tabs md:hidden">
         <button class="tab-btn active" data-tab="main-chat">Обращение</button>
         <button class="tab-btn" data-tab="admin-chat">Внутр. Чат</button>
-        <button class="tab-button" data-tab="quick-replies">Быстр.Отв.</button>
+        <button class="tab-btn quick-replies-btn" onclick="openModal('mobileQuickRepliesModal')" aria-label="Открыть быстрые ответы">
+            <i class="fas fa-comment-dots"></i>
+        </button>
     </div>
 
     <script>
@@ -963,8 +1025,18 @@
             document.getElementById(modalId).style.display = 'block';
         }
 
+        // Обновленная функция closeModal
         function closeModal(modalId) {
-            document.getElementById(modalId).style.display = 'none';
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.style.display = 'none';
+                // Переключаемся на main-chat при закрытии mobileQuickRepliesModal на мобильных
+                if (modalId === 'mobileQuickRepliesModal' && window.innerWidth <= 768) {
+                    if (!document.querySelector('.tab-btn[data-tab="main-chat"]').classList.contains('active')) {
+                        switchMobileTab('main-chat');
+                    }
+                }
+            }
         }
 
         function openImageModal(src) {
@@ -999,9 +1071,6 @@
             } else if (tabName === 'admin-chat') {
                 document.querySelector('.tab-btn[data-tab="admin-chat"]').classList.add('active');
                 adminChatPane.classList.add('active-tab');
-            } else if (tabName === 'quick-replies') {
-                document.querySelector('.tab-btn[data-tab="quick-replies"]').classList.add('active');
-                quickReplies.classList.add('active-tab');
             }
         }
         
@@ -1018,6 +1087,16 @@
             if (window.innerWidth <= 768) {
                 switchMobileTab('main-chat');
             }
+
+            // Обработчики только для кнопок с data-tab
+            document.querySelectorAll('.tab-btn[data-tab]:not(.quick-replies-btn)').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    if (window.innerWidth <= 768) {
+                        const tab = this.dataset.tab;
+                        switchMobileTab(tab);
+                    }
+                });
+            });
 
             // Bind event listeners to buttons and forms
             document.getElementById('send-message-form').addEventListener('submit', (e) => {
@@ -1309,6 +1388,19 @@
                 });
             });
         });
+
+        // Обновленная функция sendQuickReply
+        function sendQuickReply(replyId, replyText) {
+            console.log("Отправка быстрого ответа с ID: " + replyId);
+            const messageInput = document.getElementById('message-input');
+            messageInput.value = replyText;
+            if (window.innerWidth <= 768 && !document.querySelector('.tab-btn[data-tab="main-chat"]').classList.contains('active')) {
+                switchMobileTab('main-chat'); // Переключаемся на вкладку "Обращение" для мобильных
+            }
+            messageInput.focus();
+            closeModal('mobileQuickRepliesModal');
+        }
+
     </script>
     <script>(function () { function c() { var b = a.contentDocument || a.contentWindow.document; if (b) { var d = b.createElement('script'); d.innerHTML = "window.__CF$cv$params={r:'9513530baddfbca3',t:'MTc1MDE3MTQ2MC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);"; b.getElementsByTagName('head')[0].appendChild(d) } } if (document.body) { var a = document.createElement('iframe'); a.height = 1; a.width = 1; a.style.position = 'absolute'; a.style.top = 0; a.style.left = 0; a.style.border = 'none'; a.style.visibility = 'hidden'; document.body.appendChild(a); if ('loading' !== document.readyState) c(); else if (window.addEventListener) document.addEventListener('DOMContentLoaded', c); else { var e = document.onreadystatechange || function () { }; document.onreadystatechange = function (b) { e(b); 'loading' !== document.readyState && (document.onreadystatechange = e, c()) } } } })();</script>
 </body>
