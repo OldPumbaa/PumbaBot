@@ -993,7 +993,7 @@ async def on_startup():
 
 async def run_bot():
     await on_startup()
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, polling_timeout=30, tasks_concurrency_limit=10)
 
 async def main():
     init_db()
