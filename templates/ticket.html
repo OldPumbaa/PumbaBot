@@ -231,8 +231,7 @@
                 aria-label="Назад">
                 <i class="fas fa-left-long"></i>
             </button>
-            <button id="close-ticket-btn" class="bg-green-500 text-white p-2 rounded flex items-center"
-                aria-label="Закрыть тикет">
+            <button id="close-ticket-btn" class="bg-green-500 text-white p-2 rounded flex items-center" aria-label="Закрыть тикет">
                 <i class="fas fa-check-double"></i>
             </button>
         </div>
@@ -1109,6 +1108,9 @@
             });
 
             document.getElementById('close-ticket-btn').addEventListener('click', async () => {
+                if (!window.confirm('Вы точно хотите закрыть тикет?')) {
+                    return; // Если отмена, выходим из функции
+                }
                 const formData = new FormData();
                 formData.append('ticket_id', '{{ ticket_id }}');
                 try {
