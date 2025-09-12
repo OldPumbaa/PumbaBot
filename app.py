@@ -828,8 +828,7 @@ async def send_message(
         timestamp = datetime.now(astana_tz).isoformat()
         
         db_text = text if text else ""
-        if file and file.filename:
-            db_text = f"[Файл] {file.filename}" if not text else text
+        # Убрали добавление "[Файл] {filename}" — имя теперь только в attachments, не в тексте
         
         cursor.execute(
             "INSERT INTO messages (ticket_id, telegram_id, employee_telegram_id, text, is_from_bot, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
@@ -842,11 +841,16 @@ async def send_message(
         file_type = None
         if file and file.filename:
             logging.debug(f"Получен файл: {file.filename}, тип: {file.content_type}")
-            file_type = 'image' if file.content_type.startswith('image/') else 'document'
+            # Расширенная логика: MIME + fallback на extension для Ctrl+V без content_type
+            extensions_image = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'}
+            ext = os.path.splitext(file.filename.lower())[1] if file.filename else ''
+            is_image_by_ext = ext in extensions_image
+
+            file_type = 'image' if (file.content_type and file.content_type.startswith('image/')) or is_image_by_ext else 'document'
             if file_type == 'image':
-                file_name = f"image_{int(time.time())}{os.path.splitext(file.filename)[1]}"
+                file_name = f"image_{int(time.time())}{ext if ext else '.png'}"
             else:
-                file_name = file.filename
+                file_name = file.filename or 'document'
             file_name = get_unique_filename(file_name, directory="Uploads")
             file_path = f"Uploads/{file_name}"
             try:
@@ -903,16 +907,18 @@ async def send_message(
         logging.debug(f"Сообщение добавлено в очередь")
 
         logging.debug(f"Отправляем уведомление через SocketIO для ticket_id={ticket_id}")
+        attachments = []
+        if file_path:
+            attachments = [{"file_path": file_path, "file_name": file_name, "file_type": file_type}]
+
         await sio.emit("new_message", {
             "ticket_id": ticket_id,
             "telegram_id": telegram_id,
-            "text": db_text,
+            "text": db_text,  # Чистый текст
             "is_from_bot": True,
             "timestamp": timestamp,
             "login": employee["login"],
-            "file_path": file_path,
-            "file_name": file_name,
-            "file_type": file_type,
+            "attachments": attachments,  # <-- Добавь это — унифицирует с main.py
             "message_id": message_id
         })
         logging.debug("Уведомление через SocketIO отправлено")

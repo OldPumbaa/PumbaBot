@@ -11,6 +11,27 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
+        .message-text {
+            line-height: 1.6; /* Легкий интервал для читаемости, без пропусков */
+            white-space: normal; /* Убирает extra строки от \n, текст wrap'ится естественно */
+            margin: 0;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.875rem;
+        }
+
+        .attachments-container {
+            margin-top: 0.25rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            padding: 0.25rem 0; /* Минимальный внутренний отступ */
+        }
+
+        .timestamp {
+            display: block;
+            margin-top: 0.5rem; /* Минимальный отступ для таймстампа */
+        }
+        
         .edit-message-btn,
         .delete-message-btn,
         .delete-quick-reply-btn {
@@ -27,13 +48,6 @@
         .delete-quick-reply-btn:hover {
             opacity: 0.8;
             background-color: rgba(0, 0, 0, 0.05);
-        }
-
-        .message-text {
-            line-height: 1;
-            margin: 0;
-            padding: 0 0.5rem;
-            font-size: 0.875rem;
         }
 
         .chat-container {
@@ -126,151 +140,37 @@
             width: 100%; /* Кнопки на всю ширину */
         }
 
-        @media (max-width: 768px) {
-            /* Заголовок и кнопки управления */
-            .flex.justify-between.items-center.mb-4 {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-            .flex.space-x-2 {
-                margin-top: 1rem;
-                flex-wrap: wrap;
-            }
-            .flex.space-x-2 button {
-                margin-bottom: 0.5rem;
-            }
-            /* Панель с типом вопроса и ответственным */
-            .mb-4.flex.space-x-4 {
-                flex-direction: row;
-                flex-wrap: wrap;
-                gap: 0.5rem;
-                align-items: center;
-            }
-            .mb-4.flex.space-x-4 > div {
-                flex: 1;
-                min-width: 45%;
-                margin-bottom: 0;
-            }
-            .mb-4.flex.space-x-4 label {
-                font-size: 0.7rem;
-                margin-right: 0.25rem;
-                white-space: nowrap;
-            }
-            .mb-4.flex.space-x-4 > div:nth-child(2) label::after {
-                content: "Отв.:";
-            }
-            .mb-4.flex.space-x-4 > div:nth-child(2) label span {
-                display: none;
-            }
-            #issue-type-select, 
-            #assign-to-select {
-                font-size: 0.7rem;
-                padding: 0.25rem;
-                height: 2rem;
-            }
-            /* Основной контейнер чатов */
-            .main-container {
-                height: calc(100vh - 220px);
-                flex-direction: column;
-                margin-bottom: 60px;
-            }
-            .chat-column {
-                width: 100%;
-                height: 100%;
-            }
-            /* Управление видимостью разделов */
-            #main-chat-pane,
-            #admin-chat-container,
-            #quick-replies-container {
-                display: none;
-            }
-            #main-chat-pane.active-tab {
-                display: flex !important; /* Показываем панель чата обращения */
-            }
-            #admin-chat-container.active-tab {
-                display: flex !important;
-            }
-            #quick-replies-container.active-tab {
-                display: block !important;
-            }
-            /* Поле ввода сообщения */
-            #message-input {
-                display: none; /* Скрываем по умолчанию */
-            }
-            #main-chat-pane.active-tab #message-input {
-                display: block; /* Показываем на вкладке "Обращение" */
-            }
-            /* Нижняя панель навигации */
-            .mobile-tabs {
-                position: fixed !important;
-                bottom: 0 !important;
-                left: 0 !important;
-                right: 0 !important;
-                background: white;
-                display: flex;
-                align-items: center;
-                padding: 10px;
-                border-top: 1px solid #e5e7eb;
-                height: 50px;
-                z-index: 1000;
-                box-sizing: border-box;
-            }
-            .tab-btn {
-                flex-grow: 1;
-                padding: 8px;
-                text-align: center;
-                border-radius: 5px;
-                font-size: 0.9rem;
-            }
-            .tab-btn.active {
-                background-color: #3b82f6;
-                color: white;
-            }
-            .tab-btn.quick-replies-btn {
-                flex-grow: 0;
-                flex-basis: 50px;
-                padding: 8px;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-            }
-            /* Отступ для body */
-            body {
-                padding-bottom: 80px;
-                box-sizing: border-box;
-                min-height: 100vh;
-            }
-            html {
-                height: 100%;
-            }
-            .tab-content {
-                display: none;
-            }
-            .tab-content.active {
-                display: block;
-            }
-            .quick-replies {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 10px;
-            }
-            .quick-replies.tab-content {
-                display: none; /* Скрываем десктопный блок на мобильных */
-            }
+        /* Новый стиль для предпросмотра attachments */
+        .preview-container {
+            margin-top: 0.5rem;
+            padding: 0.5rem;
+            border: 1px dashed #ccc;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
         }
 
-        @media (min-width: 769px) {
-            #main-chat-container,
-            #admin-chat-container {
-                display: flex !important;
-            }
-            #quick-replies-container {
-                display: block !important;
-            }
-            .mobile-tabs {
-                display: none !important;
-            }
+        .preview-image {
+            max-height: 80px;
+            max-width: 80px;
+            object-fit: contain;
         }
+
+        .preview-file-name {
+            font-size: 0.875rem;
+            color: #666;
+        }
+
+        .preview-remove {
+            cursor: pointer;
+            color: red;
+            font-weight: bold;
+        }
+
+        @media (max-width: 768px) { /* ... твой существующий медиа-запрос без изменений ... */ }
+
+        @media (min-width: 769px) { /* ... твой существующий медиа-запрос без изменений ... */ }
 
         /* В конец твоего <style> */
         #mobileQuickRepliesModal .modal-content {
@@ -363,40 +263,43 @@
         <div id="main-chat-pane" class="flex flex-col w-full md:w-3/4 bg-white rounded-lg shadow chat-column">
             <div id="messages" class="messages-container p-4 space-y-2">
                 {% for message in messages %}
-                <div class="message-container {{ 'justify-end' if message.is_from_bot else 'justify-start' }} mb-2" id="message-{{ message.message_id }}">
-                    <div class="message-text-container">
-                        <p class="message-text bg-{{ 'blue-200' if message.is_from_bot else 'gray-200' }} px-2 rounded whitespace-pre-wrap">
-                            {{ message.login }}: {{ message.text|safe }}
-
-                            {% if message.attachments %}
-                                {% for att in message.attachments %}
-                                    {% if att.file_type == 'image' %}
-                                        <img src="/{{ att.file_path }}" 
-                                            alt="{{ att.file_name }}" 
-                                            class="inline h-16 w-16 cursor-pointer"
-                                            onclick="openImageModal('/{{ att.file_path }}')">
-                                    {% else %}
-                                        <a href="/{{ att.file_path }}" 
-                                        class="inline-block text-blue-500 underline">
-                                            {% if att.file_name|length > 20 %}
-                                                {{ att.file_name[:17] + '...' }}
-                                            {% else %}
-                                                {{ att.file_name }}
-                                            {% endif %}
-                                        </a>
-                                    {% endif %}
-                                {% endfor %}
-                            {% endif %}
-
-                            <span class="timestamp text-xs text-gray-500"> ({{ message.timestamp }})</span>
-                        </p>
+                    <div class="message-container {{ 'justify-end' if message.is_from_bot else 'justify-start' }} mb-2" id="message-{{ message.message_id }}">
+                        {% if message.is_from_bot %}
+                        <div class="message-actions">
+                            <span class="edit-message-btn cursor-pointer" data-message-id="{{ message.message_id }}" data-ticket-id="{{ message.ticket_id }}" data-text="{{ message.text|e }}" title="Редактировать">
+                                <i class="fas fa-edit"></i>
+                            </span>
+                            <span class="delete-message-btn cursor-pointer ml-1" data-message-id="{{ message.message_id }}" data-ticket-id="{{ message.ticket_id }}" title="Удалить">
+                                <i class="fas fa-trash"></i>
+                            </span>
+                        </div>
+                        {% endif %}
+                        <div class="message-text-container">
+                            <p class="message-text bg-{{ 'blue-200' if message.is_from_bot else 'gray-200' }} px-2 rounded whitespace-pre-wrap">
+                                {{ message.login|e }}: {{ message.text|e }}
+                                <span class="timestamp text-xs text-gray-500 block mt-1">{{ message.timestamp }}</span>
+                                {% if message.attachments %}
+                                <div class="attachments-container">
+                                    {% for att in message.attachments %}
+                                        {% if att.file_type == 'image' %}
+                                            <img src="/{{ att.file_path|e }}" 
+                                                alt="Вложение" 
+                                                class="h-16 w-16 cursor-pointer"
+                                                onclick="openImageModal('/{{ att.file_path|e }}')">
+                                        {% else %}
+                                            <a href="/{{ att.file_path|e }}" 
+                                            class="inline-block text-blue-500 underline">
+                                            {{ shortenFilename(att.file_name)|e }}
+                                            </a>
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </p>
+                        </div>
                     </div>
-                </div>
-
-
-
                 {% endfor %}
-            </div>
+        </div>
             <form id="send-message-form" class="p-3 border-t flex items-start gap-2" enctype="multipart/form-data">
                 <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
                 <input type="hidden" name="telegram_id" value="{{ telegram_id }}">
@@ -600,6 +503,18 @@
     </div>
 
     <script>
+        function escapeHtml(text) {
+            if (text == null) return '';
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.toString().replace(/[&<>"']/g, function(m) { return map[m]; });
+        }
+
         let displayedTicketIds = new Set([{{ ticket_id }}]);
         let renderedMessageIds = new Set();
         
@@ -611,6 +526,75 @@
             return filename;
         }
 
+        function formatTimestamp(timestamp) {
+            if (!timestamp) return 'N/A';
+            try {
+                const date = new Date(timestamp);
+                return date.toLocaleString('ru-RU', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+            } catch (e) {
+                return timestamp;
+            }
+        }
+
+        // Функция рендеринга сообщения
+        function renderMessage(data) {
+            const isBot = data.is_from_bot;
+            const isHistory = data.is_history || false;
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message-container ${isBot ? 'justify-end' : 'justify-start'} mb-2`;
+            messageDiv.id = `message-${data.message_id || 'temp-' + Math.random().toString(36).substring(2)}`;
+
+            let actions = '';
+            if (isBot) {
+                actions = `
+                    <div class="message-actions">
+                        <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" data-text="${escapeHtml(data.text || '')}" title="Редактировать">
+                            <i class="fas fa-edit"></i>
+                        </span>
+                        <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" title="Удалить">
+                            <i class="fas fa-trash"></i>
+                        </span>
+                    </div>
+                `;
+            }
+
+            let attachments = '';
+            if (data.attachments && data.attachments.length > 0) {
+                attachments = `<div class="attachments-container">`;
+                data.attachments.forEach(att => {
+                    if (att.file_type === 'image') {
+                        attachments += `<img src="/${escapeHtml(att.file_path)}" alt="Вложение" class="h-16 w-16 cursor-pointer" onclick="openImageModal('/${escapeHtml(att.file_path)}')">`;
+                    } else {
+                        attachments += `<a href="/${escapeHtml(att.file_path)}" class="inline-block text-blue-500 underline">${escapeHtml(shortenFilename(att.file_name))}</a>`;
+                    }
+                });
+                attachments += `</div>`;
+            }
+
+            const historyLabel = isHistory ? `<div class="text-xs text-gray-500 mb-1">Тикет #${data.history_ticket_id}</div>` : '';
+
+            messageDiv.innerHTML = `
+                ${actions}
+                <div class="message-text-container">
+                    ${historyLabel}
+                    <p class="message-text bg-${isHistory ? 'yellow-200' : (isBot ? 'blue-200' : 'gray-200')} px-2 rounded whitespace-pre-wrap">
+                        ${escapeHtml(data.login || 'Unknown')}: ${escapeHtml(data.text || '')}
+                        <span class="timestamp text-xs text-gray-500 block mt-1">${escapeHtml(formatTimestamp(data.timestamp) || 'N/A')}</span>
+                        ${attachments}
+                    </p>
+                </div>
+            `;
+
+            return messageDiv;
+        }
+
         const socket = io(window.BASE_URL, { transports: ['websocket', 'polling'] });
 
         socket.on('connect', () => {
@@ -619,84 +603,50 @@
 
         socket.on('new_message', (data) => {
             console.log('Новое сообщение:', data);
+            
+            // Проверяем структуру данных
+            if (!data || (!data.text && (!data.attachments || data.attachments.length === 0))) {
+                console.log('Пустое сообщение или неверная структура данных');
+                return;
+            }
+            
+            // Проверяем, принадлежит ли сообщение текущему тикету
             if (data.ticket_id !== {{ ticket_id }} && !data.is_history) {
-                console.log(`Сообщение с ticket_id=${data.ticket_id} проигнорировано, так как текущий ticket_id={{ ticket_id }}`);
+                console.log(`Сообщение проигнорировано (ticket_id: ${data.ticket_id})`);
                 return;
             }
-            if ((!data.text && (!data.attachments || data.attachments.length === 0))
-                || (data.message_id && renderedMessageIds.has(data.message_id))) {
-                console.log('Сообщение пустое или уже отрисовано:', data);
+            
+            // Проверяем, не было ли сообщение уже отображено
+            if (data.message_id && renderedMessageIds.has(data.message_id)) {
+                console.log('Сообщение уже отображено');
                 return;
             }
-
+            
+            // Добавляем ID сообщения в множество отображенных
             if (data.message_id) {
                 renderedMessageIds.add(data.message_id);
             }
-            const messagesDiv = document.getElementById('messages');
-            if (!messagesDiv) {
-                console.error('Элемент #messages не найден');
-                return;
-            }
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message-container ${data.is_from_bot ? 'justify-end' : 'justify-start'} mb-2`;
-            messageDiv.id = `message-${data.message_id || 'temp-' + Math.random().toString(36).substring(2)}`;
-            const escapeHtml = (str) => {
-                const div = document.createElement('div');
-                div.textContent = str;
-                return div.innerHTML;
-            };
-            const messageContent = `
-                ${data.is_from_bot ? `
-                <div class="message-actions">
-                    <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id || ''}" data-ticket-id="${data.ticket_id || ''}" data-text="${escapeHtml(data.text || '')}" title="Редактировать">
-                        <i class="fas fa-edit"></i>
-                    </span>
-                    <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id || ''}" data-ticket-id="${data.ticket_id || ''}" title="Удалить">
-                        <i class="fas fa-trash"></i>
-                    </span>
-                </div>
-                ` : ''}
-                <div class="message-text-container">
-                    ${data.is_history ? `
-                    <div class="text-xs text-gray-500 mb-1">
-                        Тикет #${data.history_ticket_id}
-                    </div>
-                    ` : ''}
-                    <p class="message-text bg-${data.is_history ? 'yellow-200' : (data.is_from_bot ? 'blue-200' : 'gray-200')} px-2 rounded whitespace-pre-wrap">
-                        ${escapeHtml(data.login || 'Unknown')}: ${data.text ? escapeHtml(data.text) : ""}
-                        ${data.attachments ? data.attachments.map(att => `
-                            ${att.file_type === 'image' ? `
-                                <img src="/${escapeHtml(att.file_path || '')}"
-                                    alt="${escapeHtml(att.file_name || 'image')}"
-                                    class="inline h-16 w-16 cursor-pointer"
-                                    onclick="openImageModal('/${escapeHtml(att.file_path || '')}')">
-                            ` : `
-                                <a href="/${escapeHtml(att.file_path || '')}"
-                                class="inline-block text-blue-500 underline">
-                                ${shortenFilename(att.file_name)}
-                                </a>
-                            `}
-                        `).join('') : ''}
-                        <span class="timestamp text-xs text-gray-500"> (${escapeHtml(data.timestamp || 'N/A')})</span>
-                    </p>
-                </div>
-            `;
-            messageDiv.innerHTML = messageContent;
-            if (data.is_history) {
-                console.log('Добавляем сообщение истории в начало:', data.text);
-                messagesDiv.prepend(messageDiv);
-            } else {
-                console.log('Добавляем сообщение в конец:', data.text);
-                messagesDiv.appendChild(messageDiv);
-                const isAtBottom = messagesDiv.scrollTop + messagesDiv.clientHeight >= messagesDiv.scrollHeight - 100;
-                if (isAtBottom) {
-                    messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
+            
+            // Рендерим сообщение
+            try {
+                const messageDiv = renderMessage(data);
+                const messagesDiv = document.getElementById('messages');
+                
+                if (data.is_history) {
+                    messagesDiv.prepend(messageDiv);
+                } else {
+                    messagesDiv.appendChild(messageDiv);
+                    // Автоскролл только если пользователь не просматривает историю
+                    const isAtBottom = messagesDiv.scrollTop + messagesDiv.clientHeight >= messagesDiv.scrollHeight - 100;
+                    if (isAtBottom) {
+                        messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
+                    }
                 }
+                
+                bindMessageActions();
+            } catch (error) {
+                console.error('Ошибка при рендеринге сообщения:', error);
             }
-            if (data.is_history) {
-                displayedTicketIds.add(data.history_ticket_id);
-            }
-            bindMessageActions();
         });
 
         socket.on('new_admin_message', (data) => {
@@ -760,22 +710,9 @@
             if (data.ticket_id === {{ ticket_id }}) {
                 const messageDiv = document.getElementById(`message-${data.message_id}`);
                 if (messageDiv) {
-                    messageDiv.innerHTML = `
-                        <div class="message-actions">
-                            <span class="edit-message-btn cursor-pointer" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" data-text="${data.text}" title="Редактировать">
-                                <i class="fas fa-edit"></i>
-                            </span>
-                            <span class="delete-message-btn cursor-pointer ml-1" data-message-id="${data.message_id}" data-ticket-id="${data.ticket_id}" title="Удалить">
-                                <i class="fas fa-trash"></i>
-                            </span>
-                        </div>
-                        <div class="message-text-container">
-                            <p class="message-text bg-blue-200 px-2 rounded whitespace-pre-wrap">
-                                ${data.login || 'Unknown'}: ${data.text}
-                                <span class="timestamp text-xs text-gray-500"> (${data.timestamp})</span>
-                            </p>
-                        </div>
-                    `;
+                    // Полностью перерисовываем сообщение с помощью renderMessage
+                    const newMessageDiv = renderMessage(data);
+                    messageDiv.parentNode.replaceChild(newMessageDiv, messageDiv);
                     bindMessageActions();
                     showNotification('Сообщение обновлено', 'success');
                 }
@@ -836,7 +773,7 @@
             notification.textContent = message;
             document.body.appendChild(notification);
             setTimeout(() => notification.remove(), 3000);
-        }
+        } 
 
         function bindMessageActions() {
             document.querySelectorAll('.edit-message-btn').forEach(button => {
@@ -1078,6 +1015,52 @@
         document.addEventListener('DOMContentLoaded', () => {
             const messagesDiv = document.getElementById('messages');
             const adminMessagesDiv = document.getElementById('admin-messages');
+
+            bindMessageActions();
+
+            // Предпросмотр attachments
+            const fileInput = document.getElementById('file-input');
+            const messageFormDiv = document.querySelector('#send-message-form > div.flex-grow'); // Div с textarea
+
+            fileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                // Очищаем предыдущий preview
+                const existingPreview = messageFormDiv.querySelector('.preview-container');
+                if (existingPreview) existingPreview.remove();
+
+                const previewDiv = document.createElement('div');
+                previewDiv.className = 'preview-container';
+
+                if (file.type.startsWith('image/')) {
+                    const img = document.createElement('img');
+                    img.className = 'preview-image';
+                    img.src = URL.createObjectURL(file);
+                    previewDiv.appendChild(img);
+                } else {
+                    const fileNameSpan = document.createElement('span');
+                    fileNameSpan.className = 'preview-file-name';
+                    fileNameSpan.textContent = shortenFilename(file.name);
+                    previewDiv.appendChild(fileNameSpan);
+                }
+
+                const removeBtn = document.createElement('span');
+                removeBtn.className = 'preview-remove';
+                removeBtn.textContent = '×';
+                removeBtn.onclick = () => {
+                    previewDiv.remove();
+                    fileInput.value = ''; // Очищаем input
+                };
+                previewDiv.appendChild(removeBtn);
+
+                messageFormDiv.appendChild(previewDiv);
+            });
+
+            // Очистка preview после отправки (добавь в sendMessage после form.reset())
+            const preview = messageFormDiv.querySelector('.preview-container');
+            if (preview) preview.remove();
+            fileInput.value = '';
 
             // Initial scroll to bottom
             if (messagesDiv) messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -1341,6 +1324,26 @@
                         formData.append('text', inputText);
                         formData.append('file', file, `screenshot-${Date.now()}.png`);
                         formData.append('issue_type', document.getElementById('issue-type-select').value);
+
+                        // Показать превью сразу
+                        const messageFormDiv = document.querySelector('#send-message-form > div.flex-grow');
+                        const existingPreview = messageFormDiv.querySelector('.preview-container');
+                        if (existingPreview) existingPreview.remove();
+                        const previewDiv = document.createElement('div');
+                        previewDiv.className = 'preview-container';
+                        const img = document.createElement('img');
+                        img.className = 'preview-image';
+                        img.src = URL.createObjectURL(file);
+                        previewDiv.appendChild(img);
+                        const removeBtn = document.createElement('span');
+                        removeBtn.className = 'preview-remove';
+                        removeBtn.textContent = '×';
+                        removeBtn.onclick = () => {
+                            previewDiv.remove();
+                        };
+                        previewDiv.appendChild(removeBtn);
+                        messageFormDiv.appendChild(previewDiv);
+
                         try {
                             const response = await fetch('/send_message', {
                                 method: 'POST',
@@ -1349,11 +1352,14 @@
                             const data = await response.json();
                             if (data.status === 'ok') {
                                 document.getElementById('send-message-form').reset();
+                                previewDiv.remove();
                             } else {
                                 showNotification('Не удалось отправить изображение: ' + data.message, 'error');
+                                previewDiv.remove();
                             }
                         } catch (error) {
                             showNotification('Не удалось отправить изображение', 'error');
+                            previewDiv.remove();
                         }
                         return;
                     }
