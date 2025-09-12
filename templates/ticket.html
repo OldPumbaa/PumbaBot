@@ -1395,6 +1395,8 @@
                     textarea.style.height = `${Math.min(textarea.scrollHeight, 100)}px`;
                 });
             });
+
+            checkIfFromHistory();
         });
 
         // Обновленная функция sendQuickReply
@@ -1407,6 +1409,23 @@
             }
             messageInput.focus();
             closeModal('mobileQuickRepliesModal');
+        }
+
+        function checkIfFromHistory() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const fromHistory = urlParams.get('from_history') === 'true';
+            const messageForm = document.getElementById('send-message-form');
+            if (fromHistory && messageForm) {
+                // Скрываем форму
+                messageForm.style.display = 'none';
+                // Добавляем уведомление над формой
+                const notice = document.createElement('div');
+                notice.id = 'history-notice';
+                notice.style.cssText = 'color: red; font-weight: bold; padding: 10px; border: 1px solid red; border-radius: 4px; margin: 0 1rem 1rem 1rem; background-color: #fee;';
+                notice.innerHTML = 'Тикет открыт из истории поиска. Новые сообщения недоступны (только просмотр).';
+                messageForm.parentNode.insertBefore(notice, messageForm);
+                console.log('Тикет из истории: форма скрыта');
+            }
         }
 
     </script>

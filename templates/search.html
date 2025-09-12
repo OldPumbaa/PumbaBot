@@ -82,7 +82,7 @@
                 {% else %}
                 <p class="text-sm text-gray-600">Сообщений пока нет</p>
                 {% endif %}
-                <a href="/ticket/{{ ticket.id }}" class="bg-blue-500 text-white p-2 rounded inline-block mt-2">Открыть</a>
+                <a href="/ticket/{{ ticket.id }}?from_history=true" class="bg-blue-500 text-white p-2 rounded inline-block mt-2">Открыть</a>
             </div>
             {% endfor %}
         {% else %}
