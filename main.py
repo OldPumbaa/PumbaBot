@@ -76,6 +76,11 @@ def init_db():
             FOREIGN KEY (assigned_to) REFERENCES employees (telegram_id)
         )
     """)
+    cursor.execute("PRAGMA table_info(tickets)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'is_reopened_recently' not in columns:
+        logging.debug("Добавление столбца is_reopened_recently в таблицу tickets")
+        cursor.execute("ALTER TABLE tickets ADD COLUMN is_reopened_recently INTEGER DEFAULT 0")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             message_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -434,7 +439,37 @@ async def process_media_group(mg_id):
     ticket = cursor.fetchone()
     is_new_ticket = not ticket
 
-    if is_new_ticket:
+    # Проверяем недавно закрытый тикет (в пределах часа)
+    one_hour_ago = (datetime.now(astana_tz) - timedelta(hours=1)).isoformat()
+    cursor.execute(
+        """
+        SELECT ticket_id FROM tickets 
+        WHERE telegram_id = ? AND status = 'closed' AND created_at >= ?
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (telegram_id, one_hour_ago)
+    )
+    recent_ticket = cursor.fetchone()
+
+    if recent_ticket and not ticket:  # Если есть недавний закрытый тикет и нет открытого
+        ticket_id = recent_ticket[0]
+        cursor.execute(
+            "UPDATE tickets SET status = 'open', is_reopened_recently = 1 WHERE ticket_id = ?",
+            (ticket_id,)
+        )
+        # Удаляем старые рейтинги
+        cursor.execute(
+            "DELETE FROM ticket_ratings WHERE ticket_id = ?",
+            (ticket_id,)
+        )
+        cursor.execute(
+            "DELETE FROM employee_ratings WHERE ticket_id = ?",
+            (ticket_id,)
+        )
+        conn.commit()
+        logging.debug(f"Reopened ticket #{ticket_id} for telegram_id={telegram_id}")
+        is_new_ticket = False
+    elif is_new_ticket:
         cursor.execute(
             "INSERT INTO tickets (telegram_id, status, created_at, issue_type) VALUES (?, ?, ?, ?)",
             (telegram_id, "open", datetime.now(astana_tz).isoformat(), None)
@@ -467,7 +502,6 @@ async def process_media_group(mg_id):
         )
         attachments_list.append({"file_path": file_path, "file_name": file_name, "file_type": "image"})
 
-
     conn.commit()
     conn.close()
 
@@ -482,17 +516,18 @@ async def process_media_group(mg_id):
         "attachments": attachments_list
     })
 
-    if is_new_ticket:
-        await sio.emit("update_tickets", {
-            "ticket_id": ticket_id,
-            "telegram_id": telegram_id,
-            "login": login,
-            "last_message": text,
-            "last_message_timestamp": timestamp,
-            "issue_type": None,
-            "attachments": attachments_list  # Добавили для index.html
-        })
-        await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
+    skip_standard_reply = recent_ticket and not ticket
+    await sio.emit("update_tickets", {
+        "ticket_id": ticket_id,
+        "telegram_id": telegram_id,
+        "login": login,
+        "last_message": text,
+        "last_message_timestamp": timestamp,
+        "issue_type": None,
+        "attachments": attachments_list
+    })
+    await send_notification_to_topic(ticket_id, login, "Новый тикет создан", is_reopened=(recent_ticket and not ticket))
+    if not skip_standard_reply:
         reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
         if not is_working_hours():
             if get_setting("is_holiday", "0") == "1":
@@ -500,6 +535,16 @@ async def process_media_group(mg_id):
             else:
                 reply_text += "\n\n" + get_setting("non_working_hours_message", "Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.")
         await messages[0].reply(reply_text)
+        if skip_standard_reply:
+            cursor.execute(
+                "UPDATE tickets SET is_reopened_recently = 0 WHERE ticket_id = ?",
+                (ticket_id,)
+            )
+            conn.commit()
+            logging.debug(f"Флаг is_reopened_recently сброшен для ticket_id={ticket_id}")
+    else:
+        await messages[0].reply("Обращение открыто повторно.")
+        logging.debug(f"Стандартный ответ пропущен для переоткрытого ticket_id={ticket_id}")
 
     if mg_id in media_group_timer:
         del media_group_timer[mg_id]
@@ -539,7 +584,37 @@ async def handle_file(message: Message, file_type: str):
     ticket = cursor.fetchone()
     is_new_ticket = not ticket
 
-    if is_new_ticket:
+    # Проверяем недавно закрытый тикет (в пределах часа)
+    one_hour_ago = (datetime.now(astana_tz) - timedelta(hours=1)).isoformat()
+    cursor.execute(
+        """
+        SELECT ticket_id FROM tickets 
+        WHERE telegram_id = ? AND status = 'closed' AND created_at >= ?
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (telegram_id, one_hour_ago)
+    )
+    recent_ticket = cursor.fetchone()
+
+    if recent_ticket and not ticket:  # Если есть недавний закрытый тикет и нет открытого
+        ticket_id = recent_ticket[0]
+        cursor.execute(
+            "UPDATE tickets SET status = 'open', is_reopened_recently = 1 WHERE ticket_id = ?",
+            (ticket_id,)
+        )
+        # Удаляем старые рейтинги
+        cursor.execute(
+            "DELETE FROM ticket_ratings WHERE ticket_id = ?",
+            (ticket_id,)
+        )
+        cursor.execute(
+            "DELETE FROM employee_ratings WHERE ticket_id = ?",
+            (ticket_id,)
+        )
+        conn.commit()
+        logging.debug(f"Reopened ticket #{ticket_id} for telegram_id={telegram_id}")
+        is_new_ticket = False
+    elif is_new_ticket:
         cursor.execute(
             "INSERT INTO tickets (telegram_id, status, created_at, issue_type) VALUES (?, ?, ?, ?)",
             (telegram_id, "open", datetime.now(astana_tz).isoformat(), None)
@@ -580,7 +655,7 @@ async def handle_file(message: Message, file_type: str):
     await sio.emit("new_message", {
         "ticket_id": ticket_id,
         "telegram_id": telegram_id,
-        "text": text,  # <--- без [image]
+        "text": text,
         "is_from_bot": False,
         "timestamp": timestamp,
         "login": login,
@@ -588,18 +663,18 @@ async def handle_file(message: Message, file_type: str):
         "attachments": attachments_list
     })
 
-
-    if is_new_ticket:
-        await sio.emit("update_tickets", {
-            "ticket_id": ticket_id,
-            "telegram_id": telegram_id,
-            "login": login,
-            "last_message": text,
-            "last_message_timestamp": timestamp,
-            "issue_type": None,
-            "attachments": attachments_list
-        })
-        await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
+    skip_standard_reply = recent_ticket and not ticket
+    await sio.emit("update_tickets", {
+        "ticket_id": ticket_id,
+        "telegram_id": telegram_id,
+        "login": login,
+        "last_message": text,
+        "last_message_timestamp": timestamp,
+        "issue_type": None,
+        "attachments": attachments_list
+    })
+    await send_notification_to_topic(ticket_id, login, "Новый тикет создан", is_reopened=(recent_ticket and not ticket))
+    if not skip_standard_reply:
         reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
         if not is_working_hours():
             if get_setting("is_holiday", "0") == "1":
@@ -607,6 +682,16 @@ async def handle_file(message: Message, file_type: str):
             else:
                 reply_text += "\n\n" + get_setting("non_working_hours_message", "Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.")
         await message.reply(reply_text)
+        if skip_standard_reply:
+            cursor.execute(
+                "UPDATE tickets SET is_reopened_recently = 0 WHERE ticket_id = ?",
+                (ticket_id,)
+            )
+            conn.commit()
+            logging.debug(f"Флаг is_reopened_recently сброшен для ticket_id={ticket_id}")
+    else:
+        await message.reply("Обращение открыто повторно.")
+        logging.debug(f"Стандартный ответ пропущен для переоткрытого ticket_id={ticket_id}")
 
 @dp.message(ChatTopicFilter(), F.voice)
 async def handle_voice(message: Message):
@@ -669,11 +754,58 @@ async def handle_text_message(message: Message, state: FSMContext):
         is_new_ticket = not ticket
 
         if is_new_ticket:
+            # Check for recently closed ticket (within 1 hour)
+            one_hour_ago = (datetime.now(astana_tz) - timedelta(hours=1)).isoformat()
             cursor.execute(
-                "INSERT INTO tickets (telegram_id, status, created_at, issue_type) VALUES (?, ?, ?, ?)",
-                (telegram_id, "open", datetime.now(astana_tz).isoformat(), None)
+                """
+                SELECT ticket_id FROM tickets 
+                WHERE telegram_id = ? AND status = 'closed' AND created_at >= ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (telegram_id, one_hour_ago)
             )
-            ticket_id = cursor.lastrowid
+            recent_ticket = cursor.fetchone()
+            if recent_ticket:
+                ticket_id = recent_ticket[0]
+                cursor.execute(
+                    "UPDATE tickets SET status = 'open' WHERE ticket_id = ?",
+                    (ticket_id,)
+                )
+                # Remove existing ratings for this ticket
+                cursor.execute(
+                    "DELETE FROM ticket_ratings WHERE ticket_id = ?",
+                    (ticket_id,)
+                )
+                cursor.execute(
+                    "DELETE FROM employee_ratings WHERE ticket_id = ?",
+                    (ticket_id,)
+                )
+                cursor.execute(
+                    "UPDATE tickets SET is_reopened_recently = 1 WHERE ticket_id = ?",
+                    (ticket_id,)
+                )
+                conn.commit()
+                logging.debug(f"Reopened ticket #{ticket_id} for telegram_id={telegram_id}")
+                # Полный emit update_tickets для фронта (как для нового)
+                await sio.emit("update_tickets", {
+                    "ticket_id": ticket_id,
+                    "telegram_id": telegram_id,
+                    "login": login,
+                    "last_message": text,
+                    "last_message_timestamp": timestamp,
+                    "issue_type": None
+                })
+                reply_text = "Обращение открыто повторно."
+                await message.reply(reply_text)
+                await send_notification_to_topic(ticket_id, login, "", is_reopened=True)
+                is_new_ticket = False  # Пропускаем дублирующий блок ниже
+            else:
+                # Create new ticket if no recent closed ticket
+                cursor.execute(
+                    "INSERT INTO tickets (telegram_id, status, created_at, issue_type) VALUES (?, ?, ?, ?)",
+                    (telegram_id, "open", datetime.now(astana_tz).isoformat(), None)
+                )
+                ticket_id = cursor.lastrowid
         else:
             ticket_id = ticket[0]
 
@@ -696,7 +828,14 @@ async def handle_text_message(message: Message, state: FSMContext):
         })
 
         if is_new_ticket:
-            logging.debug(f"Отправка события update_tickets для нового ticket_id={ticket_id}")
+            cursor.execute(
+                "SELECT is_reopened_recently FROM tickets WHERE ticket_id = ?",
+                (ticket_id,)
+            )
+            reopen_flag = cursor.fetchone()
+            skip_standard_reply = reopen_flag and reopen_flag[0] == 1
+
+            logging.debug(f"Отправка события update_tickets для нового ticket_id={ticket_id}, skip_standard_reply={skip_standard_reply}")
             await sio.emit("update_tickets", {
                 "ticket_id": ticket_id,
                 "telegram_id": telegram_id,
@@ -706,13 +845,24 @@ async def handle_text_message(message: Message, state: FSMContext):
                 "issue_type": None
             })
             await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
-            reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
-            if not is_working_hours():
-                if get_setting("is_holiday", "0") == "1":
-                    reply_text += "\n\n" + get_setting("holiday_message", "Сегодня праздничный день, поэтому ответ может занять больше времени.")
-                else:
-                    reply_text += "\n\n" + get_setting("non_working_hours_message", "Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.")
-            await message.reply(reply_text)
+            if not skip_standard_reply:
+                reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
+                if not is_working_hours():
+                    if get_setting("is_holiday", "0") == "1":
+                        reply_text += "\n\n" + get_setting("holiday_message", "Сегодня праздничный день, поэтому ответ может занять больше времени.")
+                    else:
+                        reply_text += "\n\n" + get_setting("non_working_hours_message", "Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.")
+                await message.reply(reply_text)
+                # Сбрасываем флаг после отправки (если был)
+                if skip_standard_reply:
+                    cursor.execute(
+                        "UPDATE tickets SET is_reopened_recently = 0 WHERE ticket_id = ?",
+                        (ticket_id,)
+                    )
+                    conn.commit()
+                    logging.debug(f"Флаг is_reopened_recently сброшен для ticket_id={ticket_id}")
+            else:
+                logging.debug(f"Стандартный ответ пропущен для переоткрытого ticket_id={ticket_id}")
     else:
         ticket_id, message_id = message_data
         cursor.execute(
@@ -980,6 +1130,9 @@ async def cleanup_expired():
         now = datetime.now().isoformat()
         cursor.execute("DELETE FROM mutes WHERE end_time < ?", (now,))
         cursor.execute("DELETE FROM bans WHERE end_time IS NOT NULL AND end_time < ?", (now,))
+        # Сброс флага переоткрытия для тикетов старше часа (созданных >1 часа назад)
+        one_hour_ago = (datetime.now() - timedelta(hours=1)).isoformat()
+        cursor.execute("UPDATE tickets SET is_reopened_recently = 0 WHERE is_reopened_recently = 1 AND created_at < ?", (one_hour_ago,))
         conn.commit()
         conn.close()
 

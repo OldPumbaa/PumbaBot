@@ -111,7 +111,7 @@
             });
 
             socket.on("update_tickets", (data) => {
-                console.log('Новый тикет:', data);
+                console.log('Обновление тикета:', data);
 
                 const issueType = data.issue_type || 'n/a';
                 const issueTypeClass =
@@ -131,41 +131,68 @@
 
                 const ts = data.last_message_timestamp || data.timestamp || '';
                 const lastMessageHtml = lastMsgText
-                    ? `<p>Последнее сообщение: ${escapeHtml(lastMsgText)} 
-                        <span class="text-xs text-gray-500">(${escapeHtml(ts)})</span>
+                    ? `<p class="text-sm text-gray-700 line-clamp-2">Последнее сообщение: ${escapeHtml(lastMsgText)} 
+                        <span class="text-xs text-gray-400">(${escapeHtml(ts)})</span>
                     </p>`
-                    : `<p class="text-sm text-gray-600">Сообщений пока нет</p>`;
+                    : `<p class="text-xs text-gray-400 italic">Сообщений пока нет</p>`;
 
-                const ticketDiv = document.createElement("div");
-                ticketDiv.className = "border p-4 mb-2 rounded-lg shadow-sm bg-white hover:shadow-md transition flex flex-col h-full";
-                ticketDiv.setAttribute("data-ticket-id", data.ticket_id);
+                const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
+                if (ticketDiv) {
+                    // Update existing ticket
+                    ticketDiv.innerHTML = `
+                        <div class="flex-grow">
+                            <div class="flex items-center gap-2 mb-1">
+                                <p class="font-bold m-0">Тикет #${escapeHtml(data.ticket_id)}</p>
+                                <span data-role="issue-type" 
+                                    class="inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap ${issueTypeClass}">
+                                    ${escapeHtml(issueType)}
+                                </span>
+                            </div>
 
-                ticketDiv.innerHTML = `
-                    <div class="flex-grow">
-                        <div class="flex items-center gap-2 mb-1">
-                            <p class="font-bold m-0">Тикет #${escapeHtml(data.ticket_id)}</p>
-                            <span data-role="issue-type" 
-                                class="inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap ${issueTypeClass}">
-                                ${escapeHtml(issueType)}
-                            </span>
+                            <p>Пользователь: ${escapeHtml(data.login || 'Unknown')}</p>
+                            <p data-role="assigned">Ответственный: ${escapeHtml(data.assigned_login || 'Не назначен')}</p>
+
+                            <div class="last-message text-sm text-gray-600 mt-2">
+                                ${lastMessageHtml}
+                            </div>
                         </div>
 
-                        <p>Пользователь: ${escapeHtml(data.login || 'Unknown')}</p>
-                        <p data-role="assigned">Ответственный: ${escapeHtml(data.assigned_login || 'Не назначен')}</p>
+                        <a href="/ticket/${escapeHtml(data.ticket_id)}" 
+                        class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded inline-flex items-center mt-2 self-start">
+                        Открыть
+                        </a>
+                    `;
+                } else {
+                    // Add new ticket
+                    const newTicketDiv = document.createElement("div");
+                    newTicketDiv.className = "border p-4 mb-2 rounded-lg shadow-sm bg-white hover:shadow-md transition flex flex-col h-full";
+                    newTicketDiv.setAttribute("data-ticket-id", data.ticket_id);
 
-                        <div class="last-message text-sm text-gray-600 mt-2">
-                            ${lastMessageHtml}
+                    newTicketDiv.innerHTML = `
+                        <div class="flex-grow">
+                            <div class="flex items-center gap-2 mb-1">
+                                <p class="font-bold m-0">Тикет #${escapeHtml(data.ticket_id)}</p>
+                                <span data-role="issue-type" 
+                                    class="inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap ${issueTypeClass}">
+                                    ${escapeHtml(issueType)}
+                                </span>
+                            </div>
+
+                            <p>Пользователь: ${escapeHtml(data.login || 'Unknown')}</p>
+                            <p data-role="assigned">Ответственный: ${escapeHtml(data.assigned_login || 'Не назначен')}</p>
+
+                            <div class="last-message text-sm text-gray-600 mt-2">
+                                ${lastMessageHtml}
+                            </div>
                         </div>
-                    </div>
 
-                    <a href="/ticket/${escapeHtml(data.ticket_id)}" 
-                    class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded inline-flex items-center mt-2 self-start">
-                    Открыть
-                    </a>
-                `;
-
-
-                document.getElementById("ticketsList").prepend(ticketDiv);
+                        <a href="/ticket/${escapeHtml(data.ticket_id)}" 
+                        class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded inline-flex items-center mt-2 self-start">
+                        Открыть
+                        </a>
+                    `;
+                    document.getElementById("ticketsList").prepend(newTicketDiv);
+                }
             });
 
 

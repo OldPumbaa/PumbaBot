@@ -256,12 +256,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(AuthMiddleware)
 
-async def send_notification_to_topic(ticket_id: int, login: str, message: str):
+async def send_notification_to_topic(ticket_id: int, login: str, message: str, is_reopened: bool = False):
     if not NOTIFICATION_CHAT_ID or not NOTIFICATION_TOPIC_ID:
         logging.warning("NOTIFICATION_CHAT_ID или NOTIFICATION_TOPIC_ID не заданы, уведомление не отправлено")
         return
     try:
-        history_text = f"Тикет #{ticket_id} ({login}): {message}"
+        history_text = f"Тикет #{ticket_id} ({login}): {message if not is_reopened else f'Тикет #{ticket_id} открыт повторно'}"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="Открыть тикет", url=f"{BASE_URL}/ticket/{ticket_id}")
@@ -1135,6 +1135,9 @@ async def close_ticket(request: Request, ticket_id: int = Form(...), employee: d
         if cursor.rowcount == 0:
             conn.close()
             raise HTTPException(status_code=404, detail="Ticket not found")
+        # Remove existing ratings for this ticket
+        cursor.execute("DELETE FROM ticket_ratings WHERE ticket_id = ?", (ticket_id,))
+        cursor.execute("DELETE FROM employee_ratings WHERE ticket_id = ?", (ticket_id,))
         conn.commit()
         conn.close()
         logging.debug(f"Тикет #{ticket_id} закрыт")
@@ -1716,3 +1719,9 @@ async def connect(sid, environ):
 @sio.event
 async def disconnect(sid):
     logging.debug(f"Клиент отключился: {sid}")
+
+@sio.event
+async def ticket_reopened(sid, data):
+    logging.debug(f"Получено событие ticket_reopened: {data}")
+    await sio.emit("update_tickets", data)
+    logging.debug("Событие update_tickets отправлено для переоткрытого тикета")

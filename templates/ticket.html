@@ -168,9 +168,151 @@
             font-weight: bold;
         }
 
-        @media (max-width: 768px) { /* ... твой существующий медиа-запрос без изменений ... */ }
+        @media (max-width: 768px) {
+            /* Заголовок и кнопки управления */
+            .flex.justify-between.items-center.mb-4 {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .flex.space-x-2 {
+                margin-top: 1rem;
+                flex-wrap: wrap;
+            }
+            .flex.space-x-2 button {
+                margin-bottom: 0.5rem;
+            }
+            /* Панель с типом вопроса и ответственным */
+            .mb-4.flex.space-x-4 {
+                flex-direction: row;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+                align-items: center;
+            }
+            .mb-4.flex.space-x-4 > div {
+                flex: 1;
+                min-width: 45%;
+                margin-bottom: 0;
+            }
+            .mb-4.flex.space-x-4 label {
+                font-size: 0.7rem;
+                margin-right: 0.25rem;
+                white-space: nowrap;
+            }
+            .mb-4.flex.space-x-4 > div:nth-child(2) label::after {
+                content: "Отв.:";
+            }
+            .mb-4.flex.space-x-4 > div:nth-child(2) label span {
+                display: none;
+            }
+            #issue-type-select, 
+            #assign-to-select {
+                font-size: 0.7rem;
+                padding: 0.25rem;
+                height: 2rem;
+            }
+            /* Основной контейнер чатов */
+            .main-container {
+                height: calc(100vh - 220px);
+                flex-direction: column;
+                margin-bottom: 60px;
+            }
+            .chat-column {
+                width: 100%;
+                height: 100%;
+            }
+            /* Управление видимостью разделов */
+            #main-chat-pane,
+            #admin-chat-container,
+            #quick-replies-container {
+                display: none;
+            }
+            #main-chat-pane.active-tab {
+                display: flex !important; /* Показываем панель чата обращения */
+            }
+            #admin-chat-container.active-tab {
+                display: flex !important;
+            }
+            #quick-replies-container.active-tab {
+                display: block !important;
+            }
+            /* Поле ввода сообщения */
+            #message-input {
+                display: none; /* Скрываем по умолчанию */
+            }
+            #main-chat-pane.active-tab #message-input {
+                display: block; /* Показываем на вкладке "Обращение" */
+            }
+            /* Нижняя панель навигации */
+            .mobile-tabs {
+                position: fixed !important;
+                bottom: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                background: white;
+                display: flex;
+                align-items: center;
+                padding: 10px;
+                border-top: 1px solid #e5e7eb;
+                height: 50px;
+                z-index: 1000;
+                box-sizing: border-box;
+            }
+            .tab-btn {
+                flex-grow: 1;
+                padding: 8px;
+                text-align: center;
+                border-radius: 5px;
+                font-size: 0.9rem;
+            }
+            .tab-btn.active {
+                background-color: #3b82f6;
+                color: white;
+            }
+            .tab-btn.quick-replies-btn {
+                flex-grow: 0;
+                flex-basis: 50px;
+                padding: 8px;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }
+            /* Отступ для body */
+            body {
+                padding-bottom: 80px;
+                box-sizing: border-box;
+                min-height: 100vh;
+            }
+            html {
+                height: 100%;
+            }
+            .tab-content {
+                display: none;
+            }
+            .tab-content.active {
+                display: block;
+            }
+            .quick-replies {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+            .quick-replies.tab-content {
+                display: none; /* Скрываем десктопный блок на мобильных */
+            }
+        }
 
-        @media (min-width: 769px) { /* ... твой существующий медиа-запрос без изменений ... */ }
+        @media (min-width: 769px) {
+            #main-chat-container,
+            #admin-chat-container {
+                display: flex !important;
+            }
+            #quick-replies-container {
+                display: block !important;
+            }
+            .mobile-tabs {
+                display: none !important;
+            }
+        }
 
         /* В конец твоего <style> */
         #mobileQuickRepliesModal .modal-content {
