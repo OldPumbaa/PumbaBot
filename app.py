@@ -25,6 +25,8 @@ logging.basicConfig(
     handlers=[logging.FileHandler('bot.log'), logging.StreamHandler()]
 )
 
+astana_tz = pytz.timezone('Asia/Almaty')
+
 load_dotenv()
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
 
@@ -55,6 +57,15 @@ db_lock = asyncio.Lock()
 
 def generate_session_token():
     return secrets.token_urlsafe(32)
+
+def datetimeformat(value):
+    if not value:
+        return ""
+    astana_tz = pytz.timezone('Asia/Almaty')
+    dt = datetime.fromisoformat(value)
+    return dt.astimezone(astana_tz).strftime('%Y-%m-%d %H:%M:%S')
+
+templates.env.filters['datetimeformat'] = datetimeformat
 
 def verify_telegram_auth(data: dict, bot_token: str) -> bool:
     received_hash = data.pop("hash", None)
@@ -547,7 +558,10 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
     logging.debug(f"Запрос к тикету #{ticket_id}")
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT telegram_id, issue_type, assigned_to FROM tickets WHERE ticket_id = ?", (ticket_id,))
+    cursor.execute(
+        "SELECT telegram_id, issue_type, assigned_to, auto_close_enabled, auto_close_time FROM tickets WHERE ticket_id = ?",
+        (ticket_id,)
+    )
     ticket_data = cursor.fetchone()
     if not ticket_data:
         conn.close()
@@ -555,6 +569,8 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
     telegram_id = ticket_data["telegram_id"]
     issue_type = ticket_data["issue_type"]
     assigned_to = ticket_data["assigned_to"]
+    auto_close_enabled = ticket_data["auto_close_enabled"]  # Добавляем
+    auto_close_time = ticket_data["auto_close_time"]       # Добавляем
 
     if not assigned_to:
         cursor.execute("UPDATE tickets SET assigned_to = ? WHERE ticket_id = ?", (employee["telegram_id"], ticket_id))
@@ -604,16 +620,13 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
 
     messages = list(messages_dict.values())
 
-    cursor.execute(
-        """
+    cursor.execute("""
         SELECT am.message_id, am.ticket_id, am.telegram_id, am.text, am.timestamp, e.login
         FROM admin_messages am
         JOIN employees e ON am.telegram_id = e.telegram_id
         WHERE am.ticket_id = ?
         ORDER BY am.timestamp
-        """,
-        (ticket_id,)
-    )
+    """, (ticket_id,))
     admin_messages = [
         {
             "message_id": row[0],
@@ -681,7 +694,10 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
             "is_banned": is_banned,
             "ban_end_time": ban_end_time,
             "quick_replies": quick_replies,
-            "BASE_URL": BASE_URL
+            "BASE_URL": BASE_URL,
+            "auto_close_enabled": auto_close_enabled,  # Добавляем
+            "auto_close_time": auto_close_time,       # Добавляем
+            "from_history": request.query_params.get("from_history", "false") == "true"
         }
     )
 
@@ -1725,3 +1741,93 @@ async def ticket_reopened(sid, data):
     logging.debug(f"Получено событие ticket_reopened: {data}")
     await sio.emit("update_tickets", data)
     logging.debug("Событие update_tickets отправлено для переоткрытого тикета")
+
+auto_close_tasks = {}  # Dict для хранения задач по ticket_id
+
+async def close_ticket_after_delay(ticket_id, telegram_id, delay_hours=1):
+    delay_seconds = delay_hours * 3600
+    logging.debug(f"Started timer for ticket #{ticket_id}: sleep for {delay_seconds} seconds")
+    try:
+        await asyncio.sleep(delay_seconds)
+        logging.debug(f"Timer expired for ticket #{ticket_id}: checking for close")
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Проверяем, все еще включено ли
+        cursor.execute("SELECT auto_close_enabled, auto_close_time FROM tickets WHERE ticket_id = ?", (ticket_id,))
+        ticket = cursor.fetchone()
+        if not ticket or not ticket["auto_close_enabled"]:
+            logging.debug(f"Auto-close disabled for ticket #{ticket_id} - skipping")
+            conn.close()
+            return
+        
+        auto_close_time = ticket["auto_close_time"]
+        start_check_time = (datetime.fromisoformat(auto_close_time) - timedelta(hours=delay_hours)).isoformat()
+        cursor.execute(
+            "SELECT COUNT(*) FROM messages WHERE ticket_id = ? AND is_from_bot = 0 AND timestamp > ?",
+            (ticket_id, start_check_time)
+        )
+        user_replies = cursor.fetchone()[0]
+        
+        if user_replies == 0:
+            cursor.execute("UPDATE tickets SET status = 'closed', auto_close_enabled = 0, auto_close_time = NULL WHERE ticket_id = ?", (ticket_id,))
+            logging.info(f"Auto-closed ticket #{ticket_id} due to no user replies")
+            await message_queue.put({
+                "telegram_id": telegram_id,
+                "text": "Ваше обращение закрыто автоматически из-за отсутствия ответа.",
+                "ticket_id": ticket_id
+            })
+            await sio.emit('ticket_closed', {"ticket_id": ticket_id})
+        else:
+            logging.debug(f"Ticket #{ticket_id} not closed - has {user_replies} user replies")
+        
+        conn.commit()
+        conn.close()
+    except asyncio.CancelledError:
+        logging.debug(f"Timer for ticket #{ticket_id} cancelled")
+    finally:
+        if ticket_id in auto_close_tasks:
+            del auto_close_tasks[ticket_id]
+
+@sio.event
+async def toggle_auto_close(sid, data):
+    ticket_id = data['ticket_id']
+    enabled = data['enabled']
+    logging.debug(f"Toggle auto-close for ticket #{ticket_id}: {enabled}")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if enabled:
+        auto_close_time = (datetime.now(astana_tz) + timedelta(hours=1)).isoformat()
+        cursor.execute(
+            "UPDATE tickets SET auto_close_enabled = 1, auto_close_time = ? WHERE ticket_id = ?",
+            (auto_close_time, ticket_id)
+        )
+        telegram_id = cursor.execute("SELECT telegram_id FROM tickets WHERE ticket_id = ?", (ticket_id,)).fetchone()[0]
+        message = "Тикет будет закрыт автоматически в течение часа при отсутствии ответа."
+        await message_queue.put({
+            "telegram_id": telegram_id,
+            "text": message,
+            "ticket_id": ticket_id
+        })
+        # Запускаем индивидуальный таймер
+        if ticket_id in auto_close_tasks:
+            auto_close_tasks[ticket_id].cancel()  # Отменяем старый, если был
+        auto_close_tasks[ticket_id] = asyncio.create_task(close_ticket_after_delay(ticket_id, telegram_id))
+    else:
+        cursor.execute(
+            "UPDATE tickets SET auto_close_enabled = 0, auto_close_time = NULL WHERE ticket_id = ?",
+            (ticket_id,)
+        )
+        if ticket_id in auto_close_tasks:
+            auto_close_tasks[ticket_id].cancel()
+            del auto_close_tasks[ticket_id]
+            logging.debug(f"Cancelled auto-close timer for ticket #{ticket_id}")
+    conn.commit()
+    conn.close()
+    
+    await sio.emit('auto_close_updated', {
+        "ticket_id": ticket_id,
+        "enabled": enabled,
+        "auto_close_time": auto_close_time if enabled else None
+    })

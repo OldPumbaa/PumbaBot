@@ -40,6 +40,9 @@ if not BOT_TOKEN or not ADMIN_TELEGRAM_ID:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+conn = sqlite3.connect("support.db", timeout=10)
+cursor = conn.cursor()
+
 # Define registration states
 class RegistrationStates(StatesGroup):
     waiting_for_login = State()
@@ -81,6 +84,12 @@ def init_db():
     if 'is_reopened_recently' not in columns:
         logging.debug("Добавление столбца is_reopened_recently в таблицу tickets")
         cursor.execute("ALTER TABLE tickets ADD COLUMN is_reopened_recently INTEGER DEFAULT 0")
+    if 'auto_close_enabled' not in columns:
+        logging.debug("Добавление столбца auto_close_enabled в таблицу tickets")
+        cursor.execute("ALTER TABLE tickets ADD COLUMN auto_close_enabled INTEGER DEFAULT 0")
+    if 'auto_close_time' not in columns:
+        logging.debug("Добавление столбца auto_close_time в таблицу tickets")
+        cursor.execute("ALTER TABLE tickets ADD COLUMN auto_close_time TEXT")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             message_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -422,7 +431,7 @@ async def process_media_group(mg_id):
     messages = media_group_collector.pop(mg_id, [])
     if not messages:
         return
-
+    
     astana_tz = pytz.timezone('Asia/Almaty')
     timestamp = messages[0].date.astimezone(astana_tz).isoformat()
     caption = messages[0].caption if messages[0].caption else None
@@ -477,6 +486,20 @@ async def process_media_group(mg_id):
         ticket_id = cursor.lastrowid
     else:
         ticket_id = ticket[0]
+
+    # Проверяем, включено ли автозакрытие, и отключаем, если оно активно
+    cursor.execute("SELECT auto_close_enabled FROM tickets WHERE ticket_id = ?", (ticket_id,))
+    if cursor.fetchone()[0]:  # Если auto_close_enabled = 1
+        cursor.execute(
+            "UPDATE tickets SET auto_close_enabled = 0, auto_close_time = NULL WHERE ticket_id = ?",
+            (ticket_id,)
+        )
+        await sio.emit('auto_close_updated', {
+            "ticket_id": ticket_id,
+            "enabled": False,
+            "auto_close_time": None
+        })
+
 
     text = caption or ""
     cursor.execute(
@@ -623,6 +646,19 @@ async def handle_file(message: Message, file_type: str):
         ticket_id = cursor.lastrowid
     else:
         ticket_id = ticket[0]
+
+    # Проверяем, включено ли автозакрытие, и отключаем, если оно активно
+    cursor.execute("SELECT auto_close_enabled FROM tickets WHERE ticket_id = ?", (ticket_id,))
+    if cursor.fetchone()[0]:  # Если auto_close_enabled = 1
+        cursor.execute(
+            "UPDATE tickets SET auto_close_enabled = 0, auto_close_time = NULL WHERE ticket_id = ?",
+            (ticket_id,)
+        )
+        await sio.emit('auto_close_updated', {
+            "ticket_id": ticket_id,
+            "enabled": False,
+            "auto_close_time": None
+        })
 
     if file_type == 'image':
         file_id = message.photo[-1].file_id
@@ -810,6 +846,19 @@ async def handle_text_message(message: Message, state: FSMContext):
                 ticket_id = cursor.lastrowid
         else:
             ticket_id = ticket[0]
+
+        # Проверяем, включено ли автозакрытие, и отключаем, если оно активно
+        cursor.execute("SELECT auto_close_enabled FROM tickets WHERE ticket_id = ?", (ticket_id,))
+        if cursor.fetchone()[0]:  # Если auto_close_enabled = 1
+            cursor.execute(
+                "UPDATE tickets SET auto_close_enabled = 0, auto_close_time = NULL WHERE ticket_id = ?",
+                (ticket_id,)
+            )
+            await sio.emit('auto_close_updated', {
+                "ticket_id": ticket_id,
+                "enabled": False,
+                "auto_close_time": None
+            })
 
         cursor.execute(
             "INSERT INTO messages (ticket_id, telegram_id, employee_telegram_id, text, is_from_bot, timestamp, telegram_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",

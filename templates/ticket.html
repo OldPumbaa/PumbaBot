@@ -168,6 +168,26 @@
             font-weight: bold;
         }
 
+        /* В конец секции <style> */
+        .auto-close-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .auto-close-container input[type="checkbox"] {
+            margin: 0;
+        }
+
+        .auto-close-container label {
+            display: flex;
+            align-items: center;
+        }
+
+        .auto-close-container i {
+            font-size: 1rem;
+        }
+
         @media (max-width: 768px) {
             /* Заголовок и кнопки управления */
             .flex.justify-between.items-center.mb-4 {
@@ -378,7 +398,7 @@
             </button>
         </div>
     </div>
-    <div class="mb-4 flex space-x-4 bg-white p-3 rounded-lg shadow">
+    <div class="mb-4 flex flex-row space-x-4 bg-white p-3 rounded-lg shadow">
     <div>
         <label class="mr-2">Тип вопроса:</label>
         <select id="issue-type-select" class="p-2 border rounded">
@@ -397,6 +417,19 @@
                     emp.login }}</option>
                 {% endfor %}
             </select>
+        </div>
+        <div class="flex items-center space-x-2 auto-close-container">
+            <input type="checkbox" id="auto-close-checkbox" {% if auto_close_enabled %}checked{% endif %} class="h-4 w-4 text-blue-600 border-gray-300 rounded">
+            <label for="auto-close-checkbox" class="text-gray-700 cursor-pointer">
+                <i class="fas fa-stopwatch text-sm"></i>
+            </label>
+            <span id="auto-close-status" class="text-sm text-gray-500">
+                {% if auto_close_enabled %}
+                    Закроется в {{ auto_close_time|datetimeformat }}
+                {% else %}
+                    Выкл
+                {% endif %}
+            </span>
         </div>
     </div>
     <div id="main-chat-container" class="flex flex-col md:flex-row flex-1 gap-4 main-container">
@@ -1570,6 +1603,29 @@
             }
         }
 
+        document.getElementById('auto-close-checkbox').addEventListener('change', async function() {
+            const enabled = this.checked;
+            const ticketId = {{ ticket_id }};
+            console.log(`Toggle auto-close: ticket_id=${ticketId}, enabled=${enabled}`);
+            
+            try {
+                socket.emit('toggle_auto_close', { ticket_id: ticketId, enabled: enabled });
+                showNotification(`Автозакрытие ${enabled ? 'включено' : 'выключено'}`, 'success');
+            } catch (error) {
+                console.error('Ошибка при переключении автозакрытия:', error);
+                showNotification('Ошибка при переключении автозакрытия', 'error');
+                this.checked = !enabled; // Откат состояния чекбокса при ошибке
+            }
+        });
+
+        socket.on('auto_close_updated', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                const checkbox = document.getElementById('auto-close-checkbox');
+                const statusSpan = document.getElementById('auto-close-status');
+                checkbox.checked = data.enabled;
+                statusSpan.textContent = data.enabled ? `Закроется в ${data.auto_close_time}` : 'Выкл';
+            }
+        });
     </script>
     <script>(function () { function c() { var b = a.contentDocument || a.contentWindow.document; if (b) { var d = b.createElement('script'); d.innerHTML = "window.__CF$cv$params={r:'9513530baddfbca3',t:'MTc1MDE3MTQ2MC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);"; b.getElementsByTagName('head')[0].appendChild(d) } } if (document.body) { var a = document.createElement('iframe'); a.height = 1; a.width = 1; a.style.position = 'absolute'; a.style.top = 0; a.style.left = 0; a.style.border = 'none'; a.style.visibility = 'hidden'; document.body.appendChild(a); if ('loading' !== document.readyState) c(); else if (window.addEventListener) document.addEventListener('DOMContentLoaded', c); else { var e = document.onreadystatechange || function () { }; document.onreadystatechange = function (b) { e(b); 'loading' !== document.readyState && (document.onreadystatechange = e, c()) } } } })();</script>
 </body>
