@@ -526,25 +526,26 @@ async def process_media_group(mg_id):
         "issue_type": None,
         "attachments": attachments_list
     })
-    await send_notification_to_topic(ticket_id, login, "Новый тикет создан", is_reopened=(recent_ticket and not ticket))
-    if not skip_standard_reply:
-        reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
-        if not is_working_hours():
-            if get_setting("is_holiday", "0") == "1":
-                reply_text += "\n\n" + get_setting("holiday_message", "Сегодня праздничный день, поэтому ответ может занять больше времени.")
-            else:
-                reply_text += "\n\n" + get_setting("non_working_hours_message", "Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.")
-        await messages[0].reply(reply_text)
-        if skip_standard_reply:
-            cursor.execute(
-                "UPDATE tickets SET is_reopened_recently = 0 WHERE ticket_id = ?",
-                (ticket_id,)
-            )
-            conn.commit()
-            logging.debug(f"Флаг is_reopened_recently сброшен для ticket_id={ticket_id}")
-    else:
-        await messages[0].reply("Обращение открыто повторно.")
-        logging.debug(f"Стандартный ответ пропущен для переоткрытого ticket_id={ticket_id}")
+    if is_new_ticket or skip_standard_reply:
+        await send_notification_to_topic(ticket_id, login, "Новый тикет создан", is_reopened=(recent_ticket and not ticket))
+        if not skip_standard_reply:
+            reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
+            if not is_working_hours():
+                if get_setting("is_holiday", "0") == "1":
+                    reply_text += "\n\n" + get_setting("holiday_message", "Сегодня праздничный день, поэтому ответ может занять больше времени.")
+                else:
+                    reply_text += "\n\n" + get_setting("non_working_hours_message", "Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.")
+            await messages[0].reply(reply_text)
+            if skip_standard_reply:
+                cursor.execute(
+                    "UPDATE tickets SET is_reopened_recently = 0 WHERE ticket_id = ?",
+                    (ticket_id,)
+                )
+                conn.commit()
+                logging.debug(f"Флаг is_reopened_recently сброшен для ticket_id={ticket_id}")
+        else:
+            await messages[0].reply("Обращение открыто повторно.")
+            logging.debug(f"Стандартный ответ пропущен для переоткрытого ticket_id={ticket_id}")
 
     if mg_id in media_group_timer:
         del media_group_timer[mg_id]
@@ -673,25 +674,26 @@ async def handle_file(message: Message, file_type: str):
         "issue_type": None,
         "attachments": attachments_list
     })
-    await send_notification_to_topic(ticket_id, login, "Новый тикет создан", is_reopened=(recent_ticket and not ticket))
-    if not skip_standard_reply:
-        reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
-        if not is_working_hours():
-            if get_setting("is_holiday", "0") == "1":
-                reply_text += "\n\n" + get_setting("holiday_message", "Сегодня праздничный день, поэтому ответ может занять больше времени.")
-            else:
-                reply_text += "\n\n" + get_setting("non_working_hours_message", "Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.")
-        await message.reply(reply_text)
-        if skip_standard_reply:
-            cursor.execute(
-                "UPDATE tickets SET is_reopened_recently = 0 WHERE ticket_id = ?",
-                (ticket_id,)
-            )
-            conn.commit()
-            logging.debug(f"Флаг is_reopened_recently сброшен для ticket_id={ticket_id}")
-    else:
-        await message.reply("Обращение открыто повторно.")
-        logging.debug(f"Стандартный ответ пропущен для переоткрытого ticket_id={ticket_id}")
+    if is_new_ticket or skip_standard_reply:
+        await send_notification_to_topic(ticket_id, login, "Новый тикет создан", is_reopened=(recent_ticket and not ticket))
+        if not skip_standard_reply:
+            reply_text = get_setting("new_ticket_response", "Обращение принято. При необходимости прикрепите скриншот или файл с логами.")
+            if not is_working_hours():
+                if get_setting("is_holiday", "0") == "1":
+                    reply_text += "\n\n" + get_setting("holiday_message", "Сегодня праздничный день, поэтому ответ может занять больше времени.")
+                else:
+                    reply_text += "\n\n" + get_setting("non_working_hours_message", "Обратите внимание: сейчас выходные или нерабочее время. Мы стараемся оперативно отвечать с 12:00 до 00:00 по будням, но в это время ответ может занять больше времени.")
+            await message.reply(reply_text)
+            if skip_standard_reply:
+                cursor.execute(
+                    "UPDATE tickets SET is_reopened_recently = 0 WHERE ticket_id = ?",
+                    (ticket_id,)
+                )
+                conn.commit()
+                logging.debug(f"Флаг is_reopened_recently сброшен для ticket_id={ticket_id}")
+        else:
+            await message.reply("Обращение открыто повторно.")
+            logging.debug(f"Стандартный ответ пропущен для переоткрытого ticket_id={ticket_id}")
 
 @dp.message(ChatTopicFilter(), F.voice)
 async def handle_voice(message: Message):
