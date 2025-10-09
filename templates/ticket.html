@@ -463,7 +463,7 @@
                                         {% else %}
                                             <a href="/{{ att.file_path|e }}" 
                                             class="inline-block text-blue-500 underline">
-                                            {{ shortenFilename(att.file_name)|e }}
+                                            {{ shorten_filename(att.file_name)|e }}
                                             </a>
                                         {% endif %}
                                     {% endfor %}
@@ -1623,7 +1623,7 @@
                 const checkbox = document.getElementById('auto-close-checkbox');
                 const statusSpan = document.getElementById('auto-close-status');
                 checkbox.checked = data.enabled;
-                statusSpan.textContent = data.enabled ? `Закроется в ${data.auto_close_time}` : 'Выкл';
+                statusSpan.textContent = data.enabled ? `Закроется в ${formatTimestamp(data.auto_close_time)}` : 'Выкл';
             }
         });
     </script>

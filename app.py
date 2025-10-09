@@ -67,6 +67,15 @@ def datetimeformat(value):
 
 templates.env.filters['datetimeformat'] = datetimeformat
 
+def shorten_filename(filename):
+    if not filename:
+        return 'unknown'
+    if len(filename) > 20:
+        return filename[:17] + '...'
+    return filename
+
+templates.env.filters['shortenFilename'] = shorten_filename
+
 def verify_telegram_auth(data: dict, bot_token: str) -> bool:
     received_hash = data.pop("hash", None)
     if not received_hash:
@@ -569,8 +578,10 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
     telegram_id = ticket_data["telegram_id"]
     issue_type = ticket_data["issue_type"]
     assigned_to = ticket_data["assigned_to"]
-    auto_close_enabled = ticket_data["auto_close_enabled"]  # Добавляем
-    auto_close_time = ticket_data["auto_close_time"]       # Добавляем
+    auto_close_enabled = ticket_data["auto_close_enabled"] 
+    auto_close_time = ticket_data["auto_close_time"]       
+    notification_enabled = ticket_data["notification_enabled"]
+
 
     if not assigned_to:
         cursor.execute("UPDATE tickets SET assigned_to = ? WHERE ticket_id = ?", (employee["telegram_id"], ticket_id))
@@ -696,8 +707,10 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
             "quick_replies": quick_replies,
             "BASE_URL": BASE_URL,
             "auto_close_enabled": auto_close_enabled,  # Добавляем
-            "auto_close_time": auto_close_time,       # Добавляем
-            "from_history": request.query_params.get("from_history", "false") == "true"
+            "auto_close_time": auto_close_time,
+            "notification_enabled": notification_enabled,     
+            "from_history": request.query_params.get("from_history", "false") == "true",
+            "shorten_filename": shorten_filename  # Добавляем функцию в контекст
         }
     )
 
@@ -1830,4 +1843,24 @@ async def toggle_auto_close(sid, data):
         "ticket_id": ticket_id,
         "enabled": enabled,
         "auto_close_time": auto_close_time if enabled else None
+    })
+
+@sio.event
+async def toggle_notification(sid, data):
+    ticket_id = data['ticket_id']
+    enabled = data['enabled']
+    logging.debug(f"Toggle notification for ticket #{ticket_id}: {enabled}")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE tickets SET notification_enabled = ? WHERE ticket_id = ?",
+        (1 if enabled else 0, ticket_id)
+    )
+    conn.commit()
+    conn.close()
+    
+    await sio.emit('notification_updated', {
+        "ticket_id": ticket_id,
+        "enabled": enabled
     })

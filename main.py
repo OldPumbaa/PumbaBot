@@ -90,6 +90,9 @@ def init_db():
     if 'auto_close_time' not in columns:
         logging.debug("Добавление столбца auto_close_time в таблицу tickets")
         cursor.execute("ALTER TABLE tickets ADD COLUMN auto_close_time TEXT")
+    if 'notification_enabled' not in columns:
+        logging.debug("Добавление столбца notification_enabled в таблицу tickets")
+        cursor.execute("ALTER TABLE tickets ADD COLUMN notification_enabled INTEGER DEFAULT 0")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             message_id INTEGER PRIMARY KEY AUTOINCREMENT,
