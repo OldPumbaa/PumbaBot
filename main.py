@@ -53,6 +53,23 @@ class ChatTopicFilter(BaseFilter):
         logging.debug(f"Проверка сообщения: chat_id={message.chat.id}, chat_type={message.chat.type}, is_private={is_private}")
         return is_private
 
+async def send_notification_if_enabled(bot, ticket_id, login):
+    try:
+        conn = sqlite3.connect("support.db", timeout=10)
+        conn.row_factory = sqlite3.Row  # Устанавливаем row_factory для получения словаря
+        cursor = conn.cursor()
+        cursor.execute("SELECT notification_enabled, assigned_to FROM tickets WHERE ticket_id = ?", (ticket_id,))
+        row = cursor.fetchone()
+        logging.debug(f"Проверка уведомления: ticket_id={ticket_id}, notification_enabled={row[0] if row else None}, assigned_to={row[1] if row else None}")
+        if row and row[0] and row[1]:
+            await bot.send_message(row[1], f"Новый ответ в тикете #{ticket_id} от {login}")
+            logging.debug(f"Уведомление отправлено assigned_to={row[1]} для ticket_id={ticket_id}")
+        else:
+            logging.debug(f"Уведомление не отправлено: ticket_id={ticket_id}, данные={row}")
+        conn.close()
+    except Exception as e:
+        logging.error(f"Ошибка отправки уведомления для ticket_id={ticket_id}: {e}")
+
 def init_db():
     logging.debug("Начало инициализации базы данных")
     conn = sqlite3.connect("support.db", timeout=10)
@@ -531,6 +548,8 @@ async def process_media_group(mg_id):
     conn.commit()
     conn.close()
 
+    await send_notification_if_enabled(bot, ticket_id, login)
+
     await sio.emit("new_message", {
         "ticket_id": ticket_id,
         "telegram_id": telegram_id,
@@ -689,6 +708,8 @@ async def handle_file(message: Message, file_type: str):
     )
     conn.commit()
     conn.close()
+
+    await send_notification_if_enabled(bot, ticket_id, login)
 
     attachments_list = [{"file_path": file_path, "file_name": file_name, "file_type": file_type}]
 
@@ -849,6 +870,8 @@ async def handle_text_message(message: Message, state: FSMContext):
                 ticket_id = cursor.lastrowid
         else:
             ticket_id = ticket[0]
+
+        await send_notification_if_enabled(bot, ticket_id, login)
 
         # Проверяем, включено ли автозакрытие, и отключаем, если оно активно
         cursor.execute("SELECT auto_close_enabled FROM tickets WHERE ticket_id = ?", (ticket_id,))

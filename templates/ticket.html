@@ -334,7 +334,6 @@
             }
         }
 
-        /* В конец твоего <style> */
         #mobileQuickRepliesModal .modal-content {
             width: 90%;
             max-width: 400px;
@@ -342,7 +341,26 @@
         }
 
         #mobileQuickRepliesModal .modal {
-            z-index: 1000; /* Выше остальных элементов */
+            z-index: 1000;
+        }
+
+        .notification-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .notification-container input[type="checkbox"] {
+            margin: 0;
+        }
+
+        .notification-container label {
+            display: flex;
+            align-items: center;
+        }
+
+        .notification-container i {
+            font-size: 1rem;
         }
     </style>
 </head>
@@ -430,6 +448,12 @@
                     Выкл
                 {% endif %}
             </span>
+        </div>
+        <div class="flex items-center space-x-2 notification-container">
+            <input type="checkbox" id="notification-checkbox" {% if notification_enabled %}checked{% endif %} class="h-4 w-4 text-blue-600 border-gray-300 rounded">
+            <label for="notification-checkbox" class="text-gray-700 cursor-pointer">
+                <i class="fas fa-bell text-sm"></i>
+            </label>
         </div>
     </div>
     <div id="main-chat-container" class="flex flex-col md:flex-row flex-1 gap-4 main-container">
@@ -1624,6 +1648,27 @@
                 const statusSpan = document.getElementById('auto-close-status');
                 checkbox.checked = data.enabled;
                 statusSpan.textContent = data.enabled ? `Закроется в ${formatTimestamp(data.auto_close_time)}` : 'Выкл';
+            }
+        });
+
+        socket.on('notification_updated', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                document.getElementById('notification-checkbox').checked = data.enabled;
+            }
+        });
+
+        document.getElementById('notification-checkbox').addEventListener('change', async function() {
+            const enabled = this.checked;
+            const ticketId = {{ ticket_id }};
+            console.log(`Toggle notification: ticket_id=${ticketId}, enabled=${enabled}`);
+            
+            try {
+                socket.emit('toggle_notification', { ticket_id: ticketId, enabled: enabled });
+                showNotification(`Уведомления ${enabled ? 'включены' : 'выключены'}`, 'success');
+            } catch (error) {
+                console.error('Ошибка при переключении уведомлений:', error);
+                showNotification('Ошибка при переключении уведомлений', 'error');
+                this.checked = !enabled; // Откат при ошибке
             }
         });
     </script>

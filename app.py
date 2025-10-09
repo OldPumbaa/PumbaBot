@@ -568,7 +568,7 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT telegram_id, issue_type, assigned_to, auto_close_enabled, auto_close_time FROM tickets WHERE ticket_id = ?",
+        "SELECT telegram_id, issue_type, assigned_to, auto_close_enabled, auto_close_time, notification_enabled FROM tickets WHERE ticket_id = ?",
         (ticket_id,)
     )
     ticket_data = cursor.fetchone()
