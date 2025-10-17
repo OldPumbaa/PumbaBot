@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css" integrity="sha512-Kc323vGBEqzTmouAECnVceyQqyqdsSiqLQISBL29aUW4U/M7pSPA/gEUZQqv1cwx4OnYxTxve5UMg5GT6L4JJg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
     <link rel="icon" type="image/png" href="/static/favicon.png">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="/static/notifications.js"></script>
 </head>
 <body class="p-4">
     <div class="mx-auto max-w-screen-2xl px-2">
@@ -193,6 +194,9 @@
                     `;
                     document.getElementById("ticketsList").prepend(newTicketDiv);
                 }
+                if (!data.assigned_login) {
+                    startTitleFlashing('🗣️ТИКЕТ🗣️');
+                }
             });
 
 
@@ -257,7 +261,11 @@
                     </p>
                 `;
 
-                });
+                if (!data.is_from_bot) {
+                    playNotificationSound();
+                    startTitleFlashing('✉️СООБЩЕНИЕ✉️');
+                }
+            });
 
 
 
@@ -323,6 +331,8 @@
                         e.target.checked = !e.target.checked; // Откатить изменение
                     }
                 });
+
+                checkUnassignedOnLoad();
             });
 
             function escapeHtml(str) {
@@ -340,6 +350,17 @@
                 return text.length > maxLength ? text.substring(0, maxLength) + '…' : text;
             }
 
+            function checkUnassignedOnLoad() {
+                let unassignedCount = 0;
+                document.querySelectorAll('[data-role="assigned"]').forEach(el => {
+                    if (el.textContent.trim() === 'Ответственный: Не назначен') {
+                        unassignedCount++;
+                    }
+                });
+                if (unassignedCount > 0) {
+                    startTitleFlashing('🗣️ТИКЕТ🗣️');
+                }
+            }
         </script>
     </div>
 </body>

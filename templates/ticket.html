@@ -10,6 +10,7 @@
         crossorigin="anonymous" referrerpolicy="no-referrer" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="/static/notifications.js"></script>
     <style>
         .message-text {
             line-height: 1.6; /* Легкий интервал для читаемости, без пропусков */
@@ -806,6 +807,11 @@
             if (!data || (!data.text && (!data.attachments || data.attachments.length === 0))) {
                 console.log('Пустое сообщение или неверная структура данных');
                 return;
+            }
+
+            if (!data.is_from_bot) { 
+                playNotificationSound();
+                startTitleFlashing('✉️СООБЩЕНИЕ✉️');
             }
             
             // Проверяем, принадлежит ли сообщение текущему тикету
@@ -1669,6 +1675,13 @@
                 console.error('Ошибка при переключении уведомлений:', error);
                 showNotification('Ошибка при переключении уведомлений', 'error');
                 this.checked = !enabled; // Откат при ошибке
+            }
+        });
+
+        socket.on("update_tickets", (data) => {
+            // Не обновляем UI на странице тикета, только уведомление
+            if (!data.assigned_login) {
+                startTitleFlashing('🗣️ТИКЕТ🗣️');
             }
         });
     </script>
