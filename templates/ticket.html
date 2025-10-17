@@ -114,7 +114,7 @@
         
         .chat-area {
             flex: 1;
-            min-height: 0; /* Важно для правильного flex-scroll */
+            min-height: 0;
         }
         
         .messages-container {
@@ -169,28 +169,7 @@
             font-weight: bold;
         }
 
-        /* В конец секции <style> */
-        .auto-close-container {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .auto-close-container input[type="checkbox"] {
-            margin: 0;
-        }
-
-        .auto-close-container label {
-            display: flex;
-            align-items: center;
-        }
-
-        .auto-close-container i {
-            font-size: 1rem;
-        }
-
         @media (max-width: 768px) {
-            /* Заголовок и кнопки управления */
             .flex.justify-between.items-center.mb-4 {
                 flex-direction: column;
                 align-items: flex-start;
@@ -202,16 +181,19 @@
             .flex.space-x-2 button {
                 margin-bottom: 0.5rem;
             }
+            
             /* Панель с типом вопроса и ответственным */
             .mb-4.flex.space-x-4 {
                 flex-direction: row;
-                flex-wrap: wrap;
-                gap: 0.5rem;
+                flex-wrap: nowrap; /* ГЛАВНОЕ ИСПРАВЛЕНИЕ: Запретить перенос строк */
+                gap: 0.25rem; /* Уменьшаем пробел для компактности */
                 align-items: center;
+                justify-content: flex-start;
+                padding: 0.5rem;
             }
             .mb-4.flex.space-x-4 > div {
-                flex: 1;
-                min-width: 45%;
+                flex: 1 1 0%; /* ГЛАВНОЕ ИСПРАВЛЕНИЕ: Позволить элементам сжиматься */
+                min-width: 0; 
                 margin-bottom: 0;
             }
             .mb-4.flex.space-x-4 label {
@@ -231,37 +213,32 @@
                 padding: 0.25rem;
                 height: 2rem;
             }
-            /* Основной контейнер чатов */
+            
+            /* ✅ ИСПРАВЛЕНИЕ: УБИРАЕМ column, добавляем правильную высоту */
             .main-container {
-                height: calc(100vh - 220px);
-                flex-direction: column;
-                margin-bottom: 60px;
+                height: calc(100vh - 240px); /* Только высота, БЕЗ flex-direction */
+                margin-bottom: 70px;
             }
+            
             .chat-column {
                 width: 100%;
                 height: 100%;
             }
-            /* Управление видимостью разделов */
+            
+            /* Остальные стили без изменений... */
             #main-chat-pane,
             #admin-chat-container,
             #quick-replies-container {
                 display: none;
             }
             #main-chat-pane.active-tab {
-                display: flex !important; /* Показываем панель чата обращения */
+                display: flex !important;
             }
             #admin-chat-container.active-tab {
                 display: flex !important;
             }
             #quick-replies-container.active-tab {
                 display: block !important;
-            }
-            /* Поле ввода сообщения */
-            #message-input {
-                display: none; /* Скрываем по умолчанию */
-            }
-            #main-chat-pane.active-tab #message-input {
-                display: block; /* Показываем на вкладке "Обращение" */
             }
             /* Нижняя панель навигации */
             .mobile-tabs {
@@ -320,6 +297,51 @@
             .quick-replies.tab-content {
                 display: none; /* Скрываем десктопный блок на мобильных */
             }
+            .main-container {
+                height: calc(100vh - 240px); /* Было 220px → 240px для мобильной панели */
+                margin-bottom: 70px; /* Было 60px → 70px */
+            }
+            
+            .messages-container {
+                min-height: 300px; /* Увеличиваем высоту чата */
+                padding: 0.5rem; /* Меньше отступов */
+            }
+            
+            #send-message-form {
+                padding: 0.5rem; /* Было 3 → 0.5 */
+            }
+            #message-input {
+                min-h-[40px] !important; /* Компактнее */
+                padding: 0.5rem;
+            }
+            
+            #issue-type-select, #assign-to-select {
+                height: 1.75rem; /* Было 2rem */
+                font-size: 0.65rem; /* Было 0.7rem */
+                padding: 0.125rem;
+            }
+            
+            .quick-replies-container {
+                max-height: 100px; /* Было 120px */
+                padding: 0.5rem;
+            }
+            .quick-reply-btn {
+                padding: 0.25rem 0.5rem; /* Компактнее кнопки */
+                font-size: 0.75rem;
+            }
+            
+            .flex.justify-between.items-center.mb-4 {
+                padding: 0.75rem; /* Было 3 → 0.75 */
+            }
+            
+            .mobile-tabs {
+                height: 60px; /* Было 50px */
+                padding: 8px;
+            }
+            .tab-btn {
+                padding: 6px; /* Было 8px */
+                font-size: 0.8rem; /* Было 0.9rem */
+            }
         }
 
         @media (min-width: 769px) {
@@ -345,23 +367,33 @@
             z-index: 1000;
         }
 
-        .notification-container {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
+        #auto-close-status {
+            font-family: 'Courier New', monospace !important; /* Моноширинный шрифт */
+            font-weight: 700;
+            text-shadow: 0 0 2px rgba(59, 130, 246, 0.5); /* Свечение */
         }
 
-        .notification-container input[type="checkbox"] {
-            margin: 0;
+        #auto-close-status {
+            font-family: 'Courier New', monospace !important;
+            font-size: 10px !important;
+            font-weight: 700 !important;
+            white-space: nowrap;
+            pointer-events: none;
+            background: none !important; /* ← БЕЗ ФОНА */
+            padding: 0 !important;      /* ← БЕЗ ОТСТУПОВ */
+            text-shadow: 0 1px 1px rgba(0,0,0,0.2); /* ЛЕГКАЯ ТЕНЬ ДЛЯ ЧИТАЕМОСТИ */
         }
 
-        .notification-container label {
-            display: flex;
-            align-items: center;
+        #notification-container {
+            display: flex !important;
+            align-items: center !important;
+            padding-top: 2px !important; /* Сдвиг колокола на 2px ВНИЗ */
         }
 
-        .notification-container i {
-            font-size: 1rem;
+        #auto-close-container {
+            display: flex !important;
+            align-items: center !important;
+            padding-top: 2px !important; /* Секундомер остается на месте */
         }
     </style>
 </head>
@@ -372,8 +404,7 @@
             {% if is_muted %}
             <span class="text-yellow-500">🔇 Замучен до {{ mute_end_time }}</span>
             {% elif is_banned %}
-            <span class="text-red-500">🚫 Забанен {% if ban_end_time %}до {{ ban_end_time }}{% else %}навсегда{% endif
-                %}</span>
+            <span class="text-red-500">🚫 Забанен {% if ban_end_time %}до {{ ban_end_time }}{% else %}навсегда{% endif %}</span>
             {% endif %}
         </h1>
         <div class="flex space-x-2">
@@ -418,15 +449,17 @@
         </div>
     </div>
     <div class="mb-4 flex flex-row space-x-4 bg-white p-3 rounded-lg shadow">
-    <div>
-        <label class="mr-2">Тип вопроса:</label>
-        <select id="issue-type-select" class="p-2 border rounded">
+    
+        <div>
+            <label class="mr-2">Тип вопроса:</label>
+            <select id="issue-type-select" class="p-2 border rounded">
                 <option value="n/a" {% if not issue_type %}selected{% endif %}>n/a</option>
                 <option value="tech" {% if issue_type=='tech' %}selected{% endif %}>tech</option>
                 <option value="org" {% if issue_type=='org' %}selected{% endif %}>org</option>
                 <option value="ins" {% if issue_type=='ins' %}selected{% endif %}>ins</option>
             </select>
         </div>
+        
         <div>
             <label class="mr-2"><span>Ответственный:</span></label>
             <select id="assign-to-select" class="p-2 border rounded">
@@ -437,24 +470,30 @@
                 {% endfor %}
             </select>
         </div>
-        <div class="flex items-center space-x-2 auto-close-container">
-            <input type="checkbox" id="auto-close-checkbox" {% if auto_close_enabled %}checked{% endif %} class="h-4 w-4 text-blue-600 border-gray-300 rounded">
-            <label for="auto-close-checkbox" class="text-gray-700 cursor-pointer">
-                <i class="fas fa-stopwatch text-sm"></i>
-            </label>
-            <span id="auto-close-status" class="text-sm text-gray-500">
-                {% if auto_close_enabled %}
-                    Закроется в {{ auto_close_time|datetimeformat }}
-                {% else %}
-                    Выкл
-                {% endif %}
-            </span>
-        </div>
-        <div class="flex items-center space-x-2 notification-container">
-            <input type="checkbox" id="notification-checkbox" {% if notification_enabled %}checked{% endif %} class="h-4 w-4 text-blue-600 border-gray-300 rounded">
-            <label for="notification-checkbox" class="text-gray-700 cursor-pointer">
-                <i class="fas fa-bell text-sm"></i>
-            </label>
+
+        <div class="flex items-center space-x-2 flex-shrink-0">
+            
+            <div class="relative flex items-center justify-center">
+                <input type="checkbox" id="auto-close-checkbox" {% if auto_close_enabled %}checked{% endif %}
+                    class="absolute z-10 w-full h-full opacity-0 cursor-pointer">
+                <div id="auto-close-container" 
+                    class="flex items-center cursor-pointer p-0.5 transition-colors relative" style="width: 24px; height: 24px;">
+                    <i id="auto-close-icon" class="fas fa-stopwatch text-sm {% if auto_close_enabled %}text-blue-600{% else %}text-gray-500{% endif %}"></i>
+                    <span id="auto-close-status" 
+                        class="absolute -bottom-2 left-1/2 transform -translate-x-1/2 text-xs font-mono text-blue-600 font-bold whitespace-nowrap z-50"
+                        style="visibility: hidden;">
+                    </span>
+                </div>
+            </div>
+
+            <div class="relative flex items-center justify-center">
+                <input type="checkbox" id="notification-checkbox" {% if notification_enabled %}checked{% endif %}
+                    class="absolute z-10 w-full h-full opacity-0 cursor-pointer">
+                <div id="notification-container"
+                    class="flex items-center cursor-pointer p-1 transition-colors">
+                    <i id="notification-icon" class="fas fa-bell text-lg text-gray-500"></i>
+                </div>
+            </div>
         </div>
     </div>
     <div id="main-chat-container" class="flex flex-col md:flex-row flex-1 gap-4 main-container">
@@ -1259,6 +1298,19 @@
                 previewDiv.appendChild(removeBtn);
 
                 messageFormDiv.appendChild(previewDiv);
+
+                function displayAutoCloseStatus(data) {
+                    const checkbox = document.getElementById('auto-close-checkbox');
+                    const statusSpan = document.getElementById('auto-close-status');
+
+                    if (!checkbox || !statusSpan) return;
+
+                    checkbox.checked = data.enabled;
+
+                    if (autoCloseEnabled && autoCloseTime) {
+                        displayAutoCloseStatus({ enabled: true, auto_close_time: autoCloseTime });
+                    }
+                }
             });
 
             // Очистка preview после отправки (добавь в sendMessage после form.reset())
@@ -1601,6 +1653,54 @@
                 });
             });
 
+            const autoCloseCheckbox = document.getElementById('auto-close-checkbox');
+            const autoCloseIcon = document.getElementById('auto-close-icon');
+            const autoCloseContainer = document.getElementById('auto-close-container');
+            const autoCloseStatus = document.getElementById('auto-close-status');
+
+            function updateAutoCloseState() {
+                if (autoCloseCheckbox.checked) {
+                    autoCloseIcon.className = 'fas fa-stopwatch text-lg text-blue-600';
+                    autoCloseContainer.className = 'flex flex-col items-center cursor-pointer p-1 transition-colors text-blue-600';
+                    autoCloseStatus.style.visibility = 'visible';
+                } else {
+                    autoCloseIcon.className = 'fas fa-stopwatch text-lg text-gray-500';
+                    autoCloseContainer.className = 'flex flex-col items-center cursor-pointer p-1 transition-colors text-gray-500';
+                    autoCloseStatus.style.visibility = 'hidden';
+                }
+            }
+
+            const notificationCheckbox = document.getElementById('notification-checkbox');
+            const notificationIcon = document.getElementById('notification-icon');
+            const notificationContainer = document.getElementById('notification-container');
+
+            function updateNotificationState() {
+                if (notificationCheckbox.checked) {
+                    notificationIcon.className = 'fas fa-bell text-lg text-yellow-500';
+                    notificationContainer.className = 'flex items-center cursor-pointer p-1 transition-colors text-yellow-700';
+                } else {
+                    notificationIcon.className = 'fas fa-bell text-lg text-gray-500';
+                    notificationContainer.className = 'flex items-center cursor-pointer p-1 transition-colors text-gray-500';
+                }
+            }
+
+            // Привязка событий
+            autoCloseCheckbox.addEventListener('change', updateAutoCloseState);
+            notificationCheckbox.addEventListener('change', updateNotificationState);
+
+            // Инициализация состояния при загрузке
+            updateAutoCloseState();
+            updateNotificationState();
+
+            const autoCloseEnabled = {{ auto_close_enabled|lower }};
+            const autoCloseTime = '{{ auto_close_time or "" }}';
+            if (autoCloseEnabled && autoCloseTime) {
+                displayAutoCloseStatus({ 
+                    enabled: true, 
+                    auto_close_time: autoCloseTime 
+                });
+            }
+
             checkIfFromHistory();
         });
 
@@ -1639,21 +1739,45 @@
             console.log(`Toggle auto-close: ticket_id=${ticketId}, enabled=${enabled}`);
             
             try {
+                // Прячем подпись сразу, чтобы избежать мигания
+                document.getElementById('auto-close-status').style.visibility = 'hidden';
+
                 socket.emit('toggle_auto_close', { ticket_id: ticketId, enabled: enabled });
-                showNotification(`Автозакрытие ${enabled ? 'включено' : 'выключено'}`, 'success');
+                // showNotification теперь будет в socket.on('auto_close_updated', ...)
             } catch (error) {
                 console.error('Ошибка при переключении автозакрытия:', error);
                 showNotification('Ошибка при переключении автозакрытия', 'error');
                 this.checked = !enabled; // Откат состояния чекбокса при ошибке
+                // Если произошла ошибка, попытаться восстановить видимость подписи (если была включена)
+                if (!enabled) {
+                    document.getElementById('auto-close-status').style.visibility = 'visible';
+                }
             }
         });
 
+        function displayAutoCloseStatus(data) {
+            const checkbox = document.getElementById('auto-close-checkbox');
+            const statusSpan = document.getElementById('auto-close-status');
+
+            if (!checkbox || !statusSpan) return;
+
+            checkbox.checked = data.enabled;
+
+            if (data.enabled && data.auto_close_time) {
+                const closeDate = new Date(data.auto_close_time);
+                const hours = closeDate.getHours().toString().padStart(2, '0');
+                const minutes = closeDate.getMinutes().toString().padStart(2, '0');
+                statusSpan.textContent = `${hours}:${minutes}`;
+                statusSpan.style.visibility = 'visible';
+            } else {
+                statusSpan.style.visibility = 'hidden';
+            }
+        }
+
         socket.on('auto_close_updated', (data) => {
             if (data.ticket_id === {{ ticket_id }}) {
-                const checkbox = document.getElementById('auto-close-checkbox');
-                const statusSpan = document.getElementById('auto-close-status');
-                checkbox.checked = data.enabled;
-                statusSpan.textContent = data.enabled ? `Закроется в ${formatTimestamp(data.auto_close_time)}` : 'Выкл';
+                displayAutoCloseStatus(data);  // ← ПРОСТОЙ вызов
+                showNotification(`Автозакрытие ${data.enabled ? 'включено' : 'выключено'}`, 'success');
             }
         });
 
