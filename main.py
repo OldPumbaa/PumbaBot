@@ -56,14 +56,20 @@ class ChatTopicFilter(BaseFilter):
 async def send_notification_if_enabled(bot, ticket_id, login):
     try:
         conn = sqlite3.connect("support.db", timeout=10)
-        conn.row_factory = sqlite3.Row  # Устанавливаем row_factory для получения словаря
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute("SELECT notification_enabled, assigned_to FROM tickets WHERE ticket_id = ?", (ticket_id,))
+        cursor.execute("SELECT notification_enabled, assigned_to, auto_close_enabled FROM tickets WHERE ticket_id = ?", (ticket_id,))
         row = cursor.fetchone()
-        logging.debug(f"Проверка уведомления: ticket_id={ticket_id}, notification_enabled={row[0] if row else None}, assigned_to={row[1] if row else None}")
-        if row and row[0] and row[1]:
-            await bot.send_message(row[1], f"Новый ответ в тикете #{ticket_id} от {login}")
-            logging.debug(f"Уведомление отправлено assigned_to={row[1]} для ticket_id={ticket_id}")
+        logging.debug(f"Проверка уведомления: ticket_id={ticket_id}, notification_enabled={row[0] if row else None}, assigned_to={row[1] if row else None}, auto_close_enabled={row[2] if row else None}")
+        if row and row[1]:  # Если есть assigned_to
+            message = f"Новый ответ в тикете #{ticket_id} от {login}."
+            if row[2]:  # Если автозакрытие включено
+                message += " Автозакрытие выключено."
+            if row[0] or row[2]:  # Уведомляем, если включен колокольчик или было автозакрытие
+                await bot.send_message(row[1], message)
+                logging.debug(f"Уведомление отправлено assigned_to={row[1]} для ticket_id={ticket_id}")
+            else:
+                logging.debug(f"Уведомление не отправлено: колокольчик выключен и автозакрытие неактивно для ticket_id={ticket_id}")
         else:
             logging.debug(f"Уведомление не отправлено: ticket_id={ticket_id}, данные={row}")
         conn.close()
