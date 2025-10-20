@@ -9,6 +9,9 @@
     <link rel="icon" type="image/png" href="/static/favicon.png">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
     <script src="/static/notifications.js"></script>
+    <style>
+        .hidden { display: none !important; }
+    </style>
 </head>
 <body class="p-4">
     <div class="mx-auto max-w-screen-2xl px-2">
@@ -47,16 +50,18 @@
 
         <div id="ticketsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[70vh] overflow-y-auto">
             {% for ticket in tickets %}
-            <div class="border p-4 rounded-lg shadow-sm bg-white hover:shadow-md transition flex flex-col h-full" data-ticket-id="{{ ticket.id }}">
+            <div class="border p-4 rounded-lg shadow-sm bg-white hover:shadow-md transition flex flex-col h-full" data-ticket-id="{{ ticket.id }}" data-auto-close-enabled="{{ ticket.auto_close_enabled }}" data-notification-enabled="{{ ticket.notification_enabled }}">
                 
                 <div class="flex-grow">
                     <div class="flex items-center gap-2 mb-1">
-                        <p class="font-bold m-0">Тикет #{{ ticket.id }}</p>
-                        <span data-role="issue-type"
-                            class="inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap
-                            {% if ticket.issue_type == 'tech' %}bg-red-500{% elif ticket.issue_type == 'org' %}bg-blue-500{% elif ticket.issue_type == 'ins' %}bg-green-500{% else %}bg-gray-500{% endif %}">
-                            {{ ticket.issue_type | default('n/a') }}
-                        </span>
+                        <p class="font-bold m-0">
+                            Тикет #{{ ticket.id }}
+                            <span data-role="issue-type" class="inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap {% if ticket.issue_type == 'tech' %}bg-red-500{% elif ticket.issue_type == 'org' %}bg-blue-500{% elif ticket.issue_type == 'ins' %}bg-green-500{% else %}bg-gray-500{% endif %}">
+                                {{ ticket.issue_type | default('n/a') }}
+                            </span>
+                            <i class="fas fa-stopwatch text-blue-600 ml-2 auto-close-icon {% if not ticket.auto_close_enabled %}hidden{% endif %}"></i>
+                            <i class="fas fa-bell text-yellow-500 ml-2 notification-icon {% if not ticket.notification_enabled %}hidden{% endif %}"></i>
+                        </p>
                     </div>
 
                     <p>Пользователь: {{ ticket.login }}</p>
@@ -88,7 +93,6 @@
                 Открыть
                 </a>
             </div>
-
             {% endfor %}
         </div>
 
@@ -113,6 +117,8 @@
 
             socket.on("update_tickets", (data) => {
                 console.log('Обновление тикета:', data);
+                console.log('auto_close_enabled:', data.auto_close_enabled, 'type:', typeof data.auto_close_enabled);
+                console.log('notification_enabled:', data.notification_enabled, 'type:', typeof data.notification_enabled);
 
                 const issueType = data.issue_type || 'n/a';
                 const issueTypeClass =
@@ -137,69 +143,75 @@
                     </p>`
                     : `<p class="text-xs text-gray-400 italic">Сообщений пока нет</p>`;
 
+                const autoCloseEnabled = data.auto_close_enabled === 1;
+                const notificationEnabled = data.notification_enabled === 1;
+
                 const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
                 if (ticketDiv) {
                     // Update existing ticket
+                    const currentAssigned = ticketDiv.querySelector('[data-role="assigned"]')?.textContent.replace('Ответственный: ', '') || 'Не назначен';
                     ticketDiv.innerHTML = `
                         <div class="flex-grow">
                             <div class="flex items-center gap-2 mb-1">
-                                <p class="font-bold m-0">Тикет #${escapeHtml(data.ticket_id)}</p>
-                                <span data-role="issue-type" 
-                                    class="inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap ${issueTypeClass}">
-                                    ${escapeHtml(issueType)}
-                                </span>
+                                <p class="font-bold m-0">
+                                    Тикет #${escapeHtml(data.ticket_id)}
+                                    <span data-role="issue-type" class="inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap ${issueTypeClass}">
+                                        ${escapeHtml(issueType)}
+                                    </span>
+                                    <i class="fas fa-stopwatch text-blue-600 ml-2 auto-close-icon ${autoCloseEnabled ? '' : 'hidden'}"></i>
+                                    <i class="fas fa-bell text-yellow-500 ml-2 notification-icon ${notificationEnabled ? '' : 'hidden'}"></i>
+                                </p>
                             </div>
-
                             <p>Пользователь: ${escapeHtml(data.login || 'Unknown')}</p>
-                            <p data-role="assigned">Ответственный: ${escapeHtml(data.assigned_login || 'Не назначен')}</p>
-
+                            <p data-role="assigned">Ответственный: ${escapeHtml(data.assigned_login || currentAssigned)}</p>
                             <div class="last-message text-sm text-gray-600 mt-2">
                                 ${lastMessageHtml}
                             </div>
                         </div>
-
-                        <a href="/ticket/${escapeHtml(data.ticket_id)}" 
-                        class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded inline-flex items-center mt-2 self-start">
-                        Открыть
+                        <a href="/ticket/${escapeHtml(data.ticket_id)}" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded inline-flex items-center mt-2 self-start">
+                            Открыть
                         </a>
                     `;
+                    ticketDiv.dataset.autoCloseEnabled = autoCloseEnabled ? '1' : '0';
+                    ticketDiv.dataset.notificationEnabled = notificationEnabled ? '1' : '0';
+                    rebuildIndicators(ticketDiv);
                 } else {
                     // Add new ticket
                     const newTicketDiv = document.createElement("div");
-                    newTicketDiv.className = "border p-4 mb-2 rounded-lg shadow-sm bg-white hover:shadow-md transition flex flex-col h-full";
+                    newTicketDiv.className = "border p-4 rounded-lg shadow-sm bg-white hover:shadow-md transition flex flex-col h-full";
                     newTicketDiv.setAttribute("data-ticket-id", data.ticket_id);
+                    newTicketDiv.setAttribute("data-auto-close-enabled", autoCloseEnabled ? '1' : '0');
+                    newTicketDiv.setAttribute("data-notification-enabled", notificationEnabled ? '1' : '0');
 
                     newTicketDiv.innerHTML = `
                         <div class="flex-grow">
                             <div class="flex items-center gap-2 mb-1">
-                                <p class="font-bold m-0">Тикет #${escapeHtml(data.ticket_id)}</p>
-                                <span data-role="issue-type" 
-                                    class="inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap ${issueTypeClass}">
-                                    ${escapeHtml(issueType)}
-                                </span>
+                                <p class="font-bold m-0">
+                                    Тикет #${escapeHtml(data.ticket_id)}
+                                    <span data-role="issue-type" class="inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap ${issueTypeClass}">
+                                        ${escapeHtml(issueType)}
+                                    </span>
+                                    <i class="fas fa-stopwatch text-blue-600 ml-2 auto-close-icon ${autoCloseEnabled ? '' : 'hidden'}"></i>
+                                    <i class="fas fa-bell text-yellow-500 ml-2 notification-icon ${notificationEnabled ? '' : 'hidden'}"></i>
+                                </p>
                             </div>
-
                             <p>Пользователь: ${escapeHtml(data.login || 'Unknown')}</p>
                             <p data-role="assigned">Ответственный: ${escapeHtml(data.assigned_login || 'Не назначен')}</p>
-
                             <div class="last-message text-sm text-gray-600 mt-2">
                                 ${lastMessageHtml}
                             </div>
                         </div>
-
-                        <a href="/ticket/${escapeHtml(data.ticket_id)}" 
-                        class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded inline-flex items-center mt-2 self-start">
-                        Открыть
+                        <a href="/ticket/${escapeHtml(data.ticket_id)}" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded inline-flex items-center mt-2 self-start">
+                            Открыть
                         </a>
                     `;
+                    rebuildIndicators(newTicketDiv);
                     document.getElementById("ticketsList").prepend(newTicketDiv);
                 }
-                if (!data.assigned_login) {
+                if (!data.assigned_login && (data.last_message || !ticketDiv)) {
                     startTitleFlashing('🗣️ТИКЕТ🗣️');
                 }
             });
-
-
 
             socket.on("ticket_closed", (data) => {
                 console.log('Тикет закрыт:', data);
@@ -210,31 +222,29 @@
             });
 
             socket.on("ticket_assigned", (data) => {
-            const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
-            if (ticketDiv) {
-                const assignedP = ticketDiv.querySelector('[data-role="assigned"]');
-                if (assignedP) {
-                assignedP.textContent = `Ответственный: ${data.assigned_login || 'Не назначен'}`;
+                const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
+                if (ticketDiv) {
+                    const assignedP = ticketDiv.querySelector('[data-role="assigned"]');
+                    if (assignedP) {
+                        assignedP.textContent = `Ответственный: ${data.assigned_login || 'Не назначен'}`;
+                    }
                 }
-            }
             });
-
 
             socket.on("issue_type_updated", (data) => {
-            const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
-            if (ticketDiv) {
-                const typeSpan = ticketDiv.querySelector('[data-role="issue-type"]');
-                if (typeSpan) {
-                typeSpan.className = `inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap ${
-                    data.issue_type === 'tech' ? 'bg-red-500' :
-                    data.issue_type === 'org'  ? 'bg-blue-500' :
-                    data.issue_type === 'ins'  ? 'bg-green-500' : 'bg-gray-500'
-                }`;
-                typeSpan.textContent = data.issue_type || 'n/a';
+                const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
+                if (ticketDiv) {
+                    const typeSpan = ticketDiv.querySelector('[data-role="issue-type"]');
+                    if (typeSpan) {
+                        typeSpan.className = `inline-flex text-xs px-1.5 py-0.5 rounded text-white whitespace-nowrap ${
+                            data.issue_type === 'tech' ? 'bg-red-500' :
+                            data.issue_type === 'org'  ? 'bg-blue-500' :
+                            data.issue_type === 'ins'  ? 'bg-green-500' : 'bg-gray-500'
+                        }`;
+                        typeSpan.textContent = data.issue_type || 'n/a';
+                    }
                 }
-            }
             });
-
 
             socket.on("new_message", (data) => {
                 if (!data.ticket_id || !data.timestamp) return;
@@ -266,8 +276,6 @@
                     startTitleFlashing('✉️СООБЩЕНИЕ✉️');
                 }
             });
-
-
 
             socket.on("employee_rated", (data) => {
                 console.log('Employee rated:', data);
@@ -309,9 +317,15 @@
             document.addEventListener('DOMContentLoaded', () => {
                 fetchEmployeeRatings();
 
+                // Отладка начальных значений и вызов rebuildIndicators для синхронизации
+                document.querySelectorAll('[data-ticket-id]').forEach(ticketDiv => {
+                    console.log(`Ticket ${ticketDiv.dataset.ticketId}: auto_close_enabled=${ticketDiv.dataset.autoCloseEnabled}, notification_enabled=${ticketDiv.dataset.notificationEnabled}`);
+                    rebuildIndicators(ticketDiv);
+                });
+
                 document.querySelectorAll('.last-msg-text').forEach(el => {
-                        el.textContent = trimText(el.textContent);
-                    });
+                    el.textContent = trimText(el.textContent);
+                });
 
                 document.getElementById('is-holiday').addEventListener('change', async (e) => {
                     const isHoliday = e.target.checked ? '1' : '0';
@@ -361,6 +375,50 @@
                     startTitleFlashing('🗣️ТИКЕТ🗣️');
                 }
             }
+
+            function rebuildIndicators(ticketDiv) {
+                console.log('rebuildIndicators:', ticketDiv.dataset.ticketId, 'autoCloseEnabled:', ticketDiv.dataset.autoCloseEnabled, 'notificationEnabled:', ticketDiv.dataset.notificationEnabled);
+                const titleP = ticketDiv.querySelector('.font-bold');
+                if (titleP) {
+                    let autoCloseIcon = titleP.querySelector('.auto-close-icon');
+                    let notificationIcon = titleP.querySelector('.notification-icon');
+                    console.log('autoCloseIcon found:', !!autoCloseIcon, 'notificationIcon found:', !!notificationIcon);
+                    if (!autoCloseIcon) {
+                        autoCloseIcon = document.createElement('i');
+                        autoCloseIcon.className = 'fas fa-stopwatch text-blue-600 ml-2 auto-close-icon';
+                        titleP.appendChild(autoCloseIcon);
+                    }
+                    if (!notificationIcon) {
+                        notificationIcon = document.createElement('i');
+                        notificationIcon.className = 'fas fa-bell text-yellow-500 ml-2 notification-icon';
+                        titleP.appendChild(notificationIcon);
+                    }
+                    autoCloseIcon.classList.toggle('hidden', ticketDiv.dataset.autoCloseEnabled !== '1');
+                    notificationIcon.classList.toggle('hidden', ticketDiv.dataset.notificationEnabled !== '1');
+                    console.log('autoCloseIcon classes:', autoCloseIcon.className);
+                    console.log('notificationIcon classes:', notificationIcon.className);
+                } else {
+                    console.error('titleP not found for ticket:', ticketDiv.dataset.ticketId);
+                }
+            }
+
+            socket.on('auto_close_updated', (data) => {
+                console.log('auto_close_updated:', data, 'enabled type:', typeof data.enabled);
+                const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
+                if (ticketDiv) {
+                    ticketDiv.dataset.autoCloseEnabled = data.enabled ? '1' : '0';  // Исправлено: проверка на truthy
+                    rebuildIndicators(ticketDiv);
+                }
+            });
+
+            socket.on('notification_updated', (data) => {
+                console.log('notification_updated:', data, 'enabled type:', typeof data.enabled);
+                const ticketDiv = document.querySelector(`[data-ticket-id="${data.ticket_id}"]`);
+                if (ticketDiv) {
+                    ticketDiv.dataset.notificationEnabled = data.enabled ? '1' : '0';  // Исправлено: проверка на truthy
+                    rebuildIndicators(ticketDiv);
+                }
+            });
         </script>
     </div>
 </body>

@@ -1778,14 +1778,49 @@
 
         socket.on('auto_close_updated', (data) => {
             if (data.ticket_id === {{ ticket_id }}) {
-                displayAutoCloseStatus(data);  // ← ПРОСТОЙ вызов
-                showNotification(`Автозакрытие ${data.enabled ? 'включено' : 'выключено'}`, 'success');
+                displayAutoCloseStatus(data);
+
+                const checkbox = document.getElementById('auto-close-checkbox');
+                const autoCloseIcon = document.getElementById('auto-close-icon');
+                const autoCloseContainer = document.getElementById('auto-close-container');
+                const autoCloseStatus = document.getElementById('auto-close-status');
+
+                // Обновляем состояние чекбокса и цвета
+                checkbox.checked = data.enabled;
+                if (data.enabled) {
+                    autoCloseIcon.className = 'fas fa-stopwatch text-lg text-blue-600';
+                    autoCloseContainer.className = 'flex flex-col items-center cursor-pointer p-1 transition-colors text-blue-600';
+                    autoCloseStatus.style.visibility = 'visible';
+                } else {
+                    autoCloseIcon.className = 'fas fa-stopwatch text-lg text-gray-500';
+                    autoCloseContainer.className = 'flex flex-col items-center cursor-pointer p-1 transition-colors text-gray-500';
+                    autoCloseStatus.style.visibility = 'hidden';
+                }
+
+                showNotification(data.enabled ? 'Автозакрытие включено' : 'Автозакрытие выключено', 'info');
             }
         });
 
+
         socket.on('notification_updated', (data) => {
-            if (data.ticket_id === {{ ticket_id }}) {
-                document.getElementById('notification-checkbox').checked = data.enabled;
+            try {
+                if (data.ticket_id === {{ ticket_id }}) {
+                    const checkbox = document.getElementById('notification-checkbox');
+                    const notificationIcon = document.getElementById('notification-icon');
+                    const notificationContainer = document.getElementById('notification-container');
+
+                    if (checkbox) checkbox.checked = !!data.enabled;
+
+                    if (data.enabled) {
+                        if (notificationIcon) notificationIcon.className = 'fas fa-bell text-lg text-yellow-500';
+                        if (notificationContainer) notificationContainer.className = 'flex items-center cursor-pointer p-1 transition-colors text-yellow-700';
+                    } else {
+                        if (notificationIcon) notificationIcon.className = 'fas fa-bell text-lg text-gray-500';
+                        if (notificationContainer) notificationContainer.className = 'flex items-center cursor-pointer p-1 transition-colors text-gray-500';
+                    }
+                }
+            } catch (e) {
+                console.error('Ошибка в обработчике notification_updated:', e);
             }
         });
 

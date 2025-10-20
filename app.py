@@ -410,7 +410,8 @@ async def index(request: Request, employee: dict = Depends(get_current_user)):
                     SELECT t.ticket_id, t.telegram_id, e.login, 
                         m.text AS last_message, m.timestamp AS last_message_timestamp,
                         m.message_id,
-                        t.issue_type, t.assigned_to, e2.login AS assigned_login
+                        t.issue_type, t.assigned_to, e2.login AS assigned_login,
+                        t.auto_close_enabled, t.notification_enabled
                     FROM tickets t 
                     JOIN employees e ON t.telegram_id = e.telegram_id 
                     LEFT JOIN (
@@ -448,7 +449,9 @@ async def index(request: Request, employee: dict = Depends(get_current_user)):
                         "issue_type": row["issue_type"],
                         "assigned_to": row["assigned_to"],
                         "assigned_login": row["assigned_login"],
-                        "attachments": attachments
+                        "attachments": attachments,
+                        "auto_close_enabled": row["auto_close_enabled"],
+                        "notification_enabled": row["notification_enabled"]
                     })
                 logging.debug(f"Получено тикетов: {len(tickets)}, пример: {tickets[:1]}")
         except Exception as e:
@@ -1836,6 +1839,18 @@ async def toggle_auto_close(sid, data):
             auto_close_tasks[ticket_id].cancel()
             del auto_close_tasks[ticket_id]
             logging.debug(f"Cancelled auto-close timer for ticket #{ticket_id}")
+
+    cursor.execute("""
+        SELECT t.telegram_id, e.login, 
+               (SELECT text FROM messages WHERE ticket_id=? ORDER BY timestamp DESC LIMIT 1) AS last_message,
+               (SELECT timestamp FROM messages WHERE ticket_id=? ORDER BY timestamp DESC LIMIT 1) AS last_message_timestamp,
+               t.issue_type, t.notification_enabled
+        FROM tickets t
+        JOIN employees e ON t.telegram_id = e.telegram_id
+        WHERE t.ticket_id=?
+    """, (ticket_id, ticket_id, ticket_id))
+    row = cursor.fetchone()
+
     conn.commit()
     conn.close()
     
@@ -1857,6 +1872,18 @@ async def toggle_notification(sid, data):
         "UPDATE tickets SET notification_enabled = ? WHERE ticket_id = ?",
         (1 if enabled else 0, ticket_id)
     )
+
+    cursor.execute("""
+        SELECT t.telegram_id, e.login, 
+               (SELECT text FROM messages WHERE ticket_id=? ORDER BY timestamp DESC LIMIT 1) AS last_message,
+               (SELECT timestamp FROM messages WHERE ticket_id=? ORDER BY timestamp DESC LIMIT 1) AS last_message_timestamp,
+               t.issue_type, t.notification_enabled
+        FROM tickets t
+        JOIN employees e ON t.telegram_id = e.telegram_id
+        WHERE t.ticket_id=?
+    """, (ticket_id, ticket_id, ticket_id))
+    row = cursor.fetchone()
+
     conn.commit()
     conn.close()
     

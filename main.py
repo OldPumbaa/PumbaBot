@@ -575,7 +575,9 @@ async def process_media_group(mg_id):
         "last_message": text,
         "last_message_timestamp": timestamp,
         "issue_type": None,
-        "attachments": attachments_list
+        "attachments": attachments_list,
+        "auto_close_enabled": 0 if is_new_ticket else cursor.execute("SELECT auto_close_enabled FROM tickets WHERE ticket_id=?", (ticket_id,)).fetchone()[0],
+        "notification_enabled": 0 if is_new_ticket else cursor.execute("SELECT notification_enabled FROM tickets WHERE ticket_id=?", (ticket_id,)).fetchone()[0]
     })
     if is_new_ticket or skip_standard_reply:
         await send_notification_to_topic(ticket_id, login, "Новый тикет создан", is_reopened=(recent_ticket and not ticket))
@@ -738,7 +740,9 @@ async def handle_file(message: Message, file_type: str):
         "last_message": text,
         "last_message_timestamp": timestamp,
         "issue_type": None,
-        "attachments": attachments_list
+        "attachments": attachments_list,
+        "auto_close_enabled": 0 if is_new_ticket else cursor.execute("SELECT auto_close_enabled FROM tickets WHERE ticket_id=?", (ticket_id,)).fetchone()[0],
+        "notification_enabled": 0 if is_new_ticket else cursor.execute("SELECT notification_enabled FROM tickets WHERE ticket_id=?", (ticket_id,)).fetchone()[0]
     })
     if is_new_ticket or skip_standard_reply:
         await send_notification_to_topic(ticket_id, login, "Новый тикет создан", is_reopened=(recent_ticket and not ticket))
@@ -861,7 +865,9 @@ async def handle_text_message(message: Message, state: FSMContext):
                     "login": login,
                     "last_message": text,
                     "last_message_timestamp": timestamp,
-                    "issue_type": None
+                    "issue_type": None,
+                    "auto_close_enabled": 0 if is_new_ticket else cursor.execute("SELECT auto_close_enabled FROM tickets WHERE ticket_id=?", (ticket_id,)).fetchone()[0],
+                    "notification_enabled": 0 if is_new_ticket else cursor.execute("SELECT notification_enabled FROM tickets WHERE ticket_id=?", (ticket_id,)).fetchone()[0]
                 })
                 reply_text = "Обращение открыто повторно."
                 await message.reply(reply_text)
@@ -925,7 +931,9 @@ async def handle_text_message(message: Message, state: FSMContext):
                 "login": login,
                 "last_message": text,
                 "last_message_timestamp": timestamp,
-                "issue_type": None
+                "issue_type": None,
+                "auto_close_enabled": 0 if is_new_ticket else cursor.execute("SELECT auto_close_enabled FROM tickets WHERE ticket_id=?", (ticket_id,)).fetchone()[0],
+                "notification_enabled": 0 if is_new_ticket else cursor.execute("SELECT notification_enabled FROM tickets WHERE ticket_id=?", (ticket_id,)).fetchone()[0]
             })
             await send_notification_to_topic(ticket_id, login, "Новый тикет создан")
             if not skip_standard_reply:
