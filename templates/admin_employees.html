@@ -5,6 +5,10 @@
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css" integrity="sha512-Kc323vGBEqzTmouAECnVceyQqyqdsSiqLQISBL29aUW4U/M7pSPA/gEUZQqv1cwx4OnYxTxve5UMg5GT6L4JJg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
     <link rel="icon" type="image/png" href="/static/favicon.png">
+    <style>
+        /* Optional: Add custom highlight color here if not using Tailwind classes */
+        /* Example: .custom-highlight { background-color: #e0f7fa; } */
+    </style>
 </head>
 <body class="p-4">
     <div class="flex flex-row justify-between items-center mb-4">
@@ -29,39 +33,41 @@
     </form>
     
     <h2 class="text-xl mb-2">Список сотрудников</h2>
-    <table class="w-full border">
+    <table id="employeeTable" class="w-full border">
         <thead>
             <tr class="bg-gray-200">
-                <th class="p-2" style="width: 15%;">Telegram ID</th>
-                <th class="p-2" style="width: 30%;">Имя</th>
-                <th class="p-2" style="width: 30%;">Логин</th>
-                <th class="p-2" style="width: 5%;">ТП</th>
-                <th class="p-2" style="width: 20%;">Действия</th>
+                <th class="p-2 min-h-8" style="width: 15%;">Telegram ID</th>
+                <th class="p-2 min-h-8" style="width: 30%;">Имя</th>
+                <th class="p-2 min-h-8" style="width: 30%;">Логин</th>
+                <th class="p-2 min-h-8" style="width: 5%;">ТП</th>
+                <th class="p-2 min-h-8 w-[100px]">Действия</th>
             </tr>
         </thead>
         <tbody>
             {% for emp in employees %}
-            <tr class="border-t">
-                <td class="p-2">{{ emp.telegram_id }}</td>
-                <td class="p-2">{{ emp.full_name }}</td>
-                <td class="p-2">{{ emp.login }}</td>
-                <td class="p-2">{{ 'Да' if emp.is_admin else 'Нет' }}</td>
-                {% if emp.login != 'admin' %}
-                    <td class="p-2 flex flex-row items-center space-x-2">
-                        <button onclick="openMessageModal({{ emp.telegram_id }})" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md transition duration-200 flex items-center" aria-label="ЛС">
+            <tr class="border-t {{ 'bg-indigo-100' if emp.is_admin else '' }}" data-is-admin="{{ '1' if emp.is_admin else '0' }}">
+                <td class="p-2 min-h-8">{{ emp.telegram_id }}</td>
+                <td class="p-2 min-h-8">{{ emp.full_name }}</td>
+                <td class="p-2 min-h-8">{{ emp.login }}</td>
+                <td class="p-2 min-h-8">{{ 'Да' if emp.is_admin else 'Нет' }}</td>
+                <td class="p-2 min-h-8 w-[100px] {{ 'bg-indigo-100' if emp.is_admin and emp.login == 'admin' else '' }}">
+                    {% if emp.login != 'admin' %}
+                    <div class="flex flex-row items-center space-x-2">
+                        <button onclick="openMessageModal({{ emp.telegram_id }})" class="bg-green-500 hover:bg-green-600 text-white w-7 h-6 rounded-md transition duration-200 flex items-center justify-center" aria-label="ЛС">
                             <i class="fas fa-envelope"></i>
                         </button>
-                        <button onclick="toggleAdminStatus({{ emp.telegram_id }}, {{ emp.is_admin }})" class="bg-{{ 'red' if emp.is_admin else 'blue' }}-500 hover:bg-{{ 'red' if emp.is_admin else 'blue' }}-600 text-white px-3 py-1 rounded-md transition duration-200 flex items-center" aria-label="{{ 'Снять ТП' if emp.is_admin else 'Назначить ТП' }}">
+                        <button onclick="toggleAdminStatus({{ emp.telegram_id }}, {{ emp.is_admin }})" class="bg-{{ 'red' if emp.is_admin else 'blue' }}-500 hover:bg-{{ 'red' if emp.is_admin else 'blue' }}-600 text-white w-7 h-6 rounded-md transition duration-200 flex items-center justify-center" aria-label="{{ 'Снять ТП' if emp.is_admin else 'Назначить ТП' }}">
                             <i class="fas fa-{{ 'person' if emp.is_admin else 'headset' }}"></i>
                         </button>
                         <form action="/admin/employees/delete" method="post" class="inline">
                             <input type="hidden" name="telegram_id" value="{{ emp.telegram_id }}">
-                            <button type="submit" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md transition duration-200 flex items-center" aria-label="Удалить">
+                            <button type="submit" class="bg-red-500 hover:bg-red-600 text-white w-7 h-6 rounded-md transition duration-200 flex items-center justify-center" aria-label="Удалить">
                                 <i class="fas fa-user-large-slash"></i>
                             </button>
                         </form>
-                    </td>
-                {% endif %}
+                    </div>
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>
@@ -129,8 +135,14 @@
                     button.classList.remove(`bg-${currentStatus ? 'red' : 'blue'}-500`, `hover:bg-${currentStatus ? 'red' : 'blue'}-600`);
                     button.classList.add(`bg-${data.is_admin ? 'red' : 'blue'}-500`, `hover:bg-${data.is_admin ? 'red' : 'blue'}-600`);
                     button.setAttribute('onclick', `toggleAdminStatus(${telegramId}, ${data.is_admin})`);
-                    const cell = button.parentElement.parentElement.cells[3];
+                    const row = button.closest('tr');
+                    const cell = row.cells[3];
                     cell.textContent = data.is_admin ? 'Да' : 'Нет';
+                    row.classList.toggle('bg-indigo-100', data.is_admin);
+                    row.setAttribute('data-is-admin', data.is_admin ? '1' : '0');
+                    const actionsCell = row.cells[4];
+                    actionsCell.classList.toggle('bg-indigo-100', data.is_admin && row.cells[2].textContent === 'admin');
+                    sortTableByAdmin(); // Re-sort table after status change
                 } else {
                     alert('Ошибка при изменении статуса.');
                 }
@@ -139,18 +151,25 @@
             }
         }
 
-        const socket = io();
-        socket.on('employee_updated', (data) => {
-            const button = document.querySelector(`button[onclick*="toggleAdminStatus(${data.telegram_id},"]`);
-            if (button) {
-                button.innerHTML = `<i class="fas fa-${data.is_admin ? 'person' : 'headset'}"></i>`;
-                button.setAttribute('aria-label', data.is_admin ? 'Снять ТП' : 'Назначить ТП');
-                button.classList.remove(`bg-${data.is_admin ? 'blue' : 'red'}-500`, `hover:bg-${data.is_admin ? 'blue' : 'red'}-600`);
-                button.classList.add(`bg-${data.is_admin ? 'red' : 'blue'}-500`, `hover:bg-${data.is_admin ? 'red' : 'blue'}-600`);
-                button.setAttribute('onclick', `toggleAdminStatus(${data.telegram_id}, ${data.is_admin})`);
-                const cell = button.parentElement.parentElement.cells[3];
-                cell.textContent = data.is_admin ? 'Да' : 'Нет';
-            }
+        function sortTableByAdmin() {
+            const table = document.getElementById('employeeTable');
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+
+            rows.sort((a, b) => {
+                const isAdminA = parseInt(a.getAttribute('data-is-admin') || '0');
+                const isAdminB = parseInt(b.getAttribute('data-is-admin') || '0');
+                return isAdminB - isAdminA; // Descending order for is_admin ("Да" first)
+            });
+
+            // Clear and re-append sorted rows
+            tbody.innerHTML = '';
+            rows.forEach(row => tbody.appendChild(row));
+        }
+
+        // Initial sort after DOM is fully loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            sortTableByAdmin();
         });
     </script>
 </body>
