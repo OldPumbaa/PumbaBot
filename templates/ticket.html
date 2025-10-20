@@ -851,6 +851,8 @@
             if (!data.is_from_bot) { 
                 playNotificationSound();
                 startTitleFlashing('✉️СООБЩЕНИЕ✉️');
+
+                document.getElementById('auto-close-icon').className = 'fas fa-stopwatch text-lg text-gray-500';
             }
             
             // Проверяем, принадлежит ли сообщение текущему тикету
