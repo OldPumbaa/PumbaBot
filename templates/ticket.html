@@ -1112,31 +1112,52 @@
             }
         }
 
+        let isSending = false;
+
         function sendMessage(form) {
-            const formData = new FormData(form);
-            const text = formData.get('text').trim();
-            const issueType = document.getElementById('issue-type-select').value;
-            formData.append('issue_type', issueType);
-            if (!text && !formData.get('file')) {
-                return;
+            if (isSending) {
+                console.log('Отправка уже идёт — блокируем дубли');
+                return false;
             }
+
+            const formData = new FormData(form);
+            const text = (formData.get('text') || '').trim();
+            const file = formData.get('file');
+
+            if (!text && (!file || file.size === 0)) {
+                console.log('Пустое сообщение — блокируем');
+                return false;
+            }
+
+            isSending = true; // Блокируем
+
+            formData.set('text', text);
+            formData.append('issue_type', document.getElementById('issue-type-select').value);
+
             fetch('/send_message', {
                 method: 'POST',
                 body: formData
             })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'ok') {
-                        form.reset();
-                        const messagesDiv = document.getElementById('messages');
-                        if (messagesDiv) messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
-                    } else {
-                        showNotification('Ошибка отправки сообщения: ' + data.message, 'error');
-                    }
-                })
-                .catch(error => {
-                    showNotification('Ошибка отправки сообщения', 'error');
-                });
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    form.reset();
+                    document.getElementById('message-input').style.height = 'auto';
+                    clearPreviews();
+                    scrollToBottom();
+                } else {
+                    showNotification('Ошибка: ' + (data.message || ''), 'error');
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                showNotification('Не удалось отправить', 'error');
+            })
+            .finally(() => {
+                isSending = false; // Разблокируем
+            });
+
+            return false;
         }
 
         function sendAdminMessage(form) {
@@ -1345,25 +1366,22 @@
                 sendMessage(e.target);
             });
 
-            document.getElementById('send-admin-message-form').addEventListener('submit', (e) => {
-                e.preventDefault();
-                sendAdminMessage(e.target);
-            });
-
-            document.getElementById('admin-message-input').addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    const form = document.getElementById('send-admin-message-form');
-                    sendAdminMessage(form);
-                }
-            });
-
             document.getElementById('message-input').addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    const form = document.getElementById('send-message-form');
-                    sendMessage(form);
+                    const form = e.target.closest('form');
+                    const text = e.target.value.trim();
+                    const fileInput = document.getElementById('file-input');
+                    const hasFile = fileInput.files && fileInput.files.length > 0;
+                    if (text || hasFile) {
+                        sendMessage(form);
+                    }
                 }
+            });
+
+            document.getElementById('send-admin-message-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                sendAdminMessage(e.target);
             });
 
             document.getElementById('close-ticket-btn').addEventListener('click', async () => {
@@ -1810,7 +1828,6 @@
                     const notificationContainer = document.getElementById('notification-container');
 
                     if (checkbox) checkbox.checked = !!data.enabled;
-
                     if (data.enabled) {
                         if (notificationIcon) notificationIcon.className = 'fas fa-bell text-lg text-yellow-500';
                         if (notificationContainer) notificationContainer.className = 'flex items-center cursor-pointer p-1 transition-colors text-yellow-700';
