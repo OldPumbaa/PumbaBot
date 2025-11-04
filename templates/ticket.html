@@ -848,7 +848,7 @@
                 return;
             }
 
-            if (!data.is_from_bot) { 
+            if (!data.is_from_bot && !data.is_history) { 
                 playNotificationSound();
                 startTitleFlashing('✉️СООБЩЕНИЕ✉️');
 
@@ -1386,31 +1386,37 @@
 
             document.getElementById('close-ticket-btn').addEventListener('click', async () => {
                 if (!window.confirm('Вы точно хотите закрыть тикет?')) {
-                    return; // Если отмена, выходим из функции
+                    return;
                 }
+
                 const formData = new FormData();
                 formData.append('ticket_id', '{{ ticket_id }}');
+
                 try {
-                    console.log(`Отправка запроса на закрытие тикета #{{ ticket_id }}`);
+                    console.log('Отправка запроса на закрытие...');
                     const response = await fetch('/close_ticket', {
                         method: 'POST',
-                        body: formData
+                        body: formData,
+                        credentials: 'include'
                     });
-                    console.log(`Ответ от /close_ticket: статус ${response.status}`);
-                    if (!response.ok) {
-                        throw new Error(`HTTP ошибка: ${response.status}`);
-                    }
-                    const data = await response.json();
-                    console.log('Данные ответа:', data);
-                    if (data.status === 'ok') {
-                        console.log('Тикет успешно закрыт, редирект на /');
-                        window.location.href = '/';
+
+                    console.log('Ответ получен:', response.status);
+
+                    // НЕ ЧИТАЕМ JSON — просто проверяем статус
+                    if (response.ok) {
+                        console.log('Тикет закрыт (200 OK), редирект...');
+                        setTimeout(() => {
+                            window.location.href = '/';
+                        }, 100);
                     } else {
-                        showNotification(`Ошибка закрытия тикета: ${data.message || 'Неизвестная ошибка'}`, 'error');
+                        // Только если НЕ 200 — показываем ошибку
+                        const text = await response.text();
+                        console.error('Ошибка сервера:', response.status, text);
+                        showNotification(`Ошибка сервера: ${response.status}`, 'error');
                     }
                 } catch (error) {
-                    console.error('Ошибка при закрытии тикета:', error);
-                    showNotification('Ошибка закрытия тикета: не удалось выполнить запрос', 'error');
+                    // СЕЙЧАС ЭТО РЕАЛЬНАЯ ОШИБКА: сеть, CORS, таймаут
+                    console.error('Критическая ошибка сети:', error);
                 }
             });
 
@@ -1628,17 +1634,19 @@
                                 method: 'POST',
                                 body: formData
                             });
+                            if (!response.ok) {
+                                throw new Error(`HTTP error! status: ${response.status}`);
+                            }
                             const data = await response.json();
                             if (data.status === 'ok') {
-                                document.getElementById('send-message-form').reset();
-                                previewDiv.remove();
+                                e.target.reset();
+                                clearPreviews();
                             } else {
-                                showNotification('Не удалось отправить изображение: ' + data.message, 'error');
-                                previewDiv.remove();
+                                showNotification('Не удалось отправить сообщение: ' + data.message, 'error');
                             }
                         } catch (error) {
-                            showNotification('Не удалось отправить изображение', 'error');
-                            previewDiv.remove();
+                            console.error('Ошибка отправки:', error);
+                            showNotification('Не удалось отправить сообщение (проверьте сеть или сервер)', 'error');
                         }
                         return;
                     }
@@ -1852,16 +1860,27 @@
             } catch (error) {
                 console.error('Ошибка при переключении уведомлений:', error);
                 showNotification('Ошибка при переключении уведомлений', 'error');
-                this.checked = !enabled; // Откат при ошибке
+                this.checked = !enabled;
             }
         });
 
         socket.on("update_tickets", (data) => {
-            // Не обновляем UI на странице тикета, только уведомление
             if (!data.assigned_login) {
                 startTitleFlashing('🗣️ТИКЕТ🗣️');
             }
         });
+
+        function clearPreviews() {
+            const previews = document.querySelectorAll('.preview-container');
+            previews.forEach(preview => preview.remove());
+        }
+
+        function scrollToBottom() {
+            const messagesContainer = document.getElementById('messages');
+            if (messagesContainer) {
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+        }
     </script>
     <script>(function () { function c() { var b = a.contentDocument || a.contentWindow.document; if (b) { var d = b.createElement('script'); d.innerHTML = "window.__CF$cv$params={r:'9513530baddfbca3',t:'MTc1MDE3MTQ2MC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);"; b.getElementsByTagName('head')[0].appendChild(d) } } if (document.body) { var a = document.createElement('iframe'); a.height = 1; a.width = 1; a.style.position = 'absolute'; a.style.top = 0; a.style.left = 0; a.style.border = 'none'; a.style.visibility = 'hidden'; document.body.appendChild(a); if ('loading' !== document.readyState) c(); else if (window.addEventListener) document.addEventListener('DOMContentLoaded', c); else { var e = document.onreadystatechange || function () { }; document.onreadystatechange = function (b) { e(b); 'loading' !== document.readyState && (document.onreadystatechange = e, c()) } } } })();</script>
 </body>

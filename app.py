@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, Form, HTTPException, Depends, File, Upload
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 import socketio
 import sqlite3
@@ -31,6 +32,18 @@ load_dotenv()
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
 
 app = FastAPI()
+
+ALLOWED_ORIGINS = [
+    "https://support.labeling.kz"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 app.mount("/socket.io", socketio.ASGIApp(sio))
