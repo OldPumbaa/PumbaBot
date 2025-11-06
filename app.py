@@ -19,6 +19,7 @@ import hashlib
 import hmac
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, User
+from typing import List
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -854,12 +855,26 @@ async def send_message(
     ticket_id: int = Form(...),
     telegram_id: int = Form(...),
     text: str = Form(None),
-    file: UploadFile = File(None),
+    files: List[UploadFile] = File(None),   # ← List, может быть None
     issue_type: str = Form(None),
     employee: dict = Depends(get_current_user)
 ):
     try:
-        logging.debug(f"Отправка сообщения: ticket_id={ticket_id}, telegram_id={telegram_id}, text={text}, file={file.filename if file else None}, issue_type={issue_type}")
+        # ------------------------------------------------------------------
+        # 1. Приводим files к списку (если None → [])
+        # ------------------------------------------------------------------
+        if files is None:
+            files = []                                     # <-- фикс
+        logging.debug(
+            f"Отправка сообщения: ticket_id={ticket_id}, "
+            f"telegram_id={telegram_id}, text={text}, "
+            f"files={[f.filename for f in files] if files else None}, "
+            f"issue_type={issue_type}"
+        )
+
+        # ------------------------------------------------------------------
+        # 2. Проверка telegram_id и получение login
+        # ------------------------------------------------------------------
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT login FROM employees WHERE telegram_id = ?", (telegram_id,))
@@ -869,56 +884,84 @@ async def send_message(
             logging.error(f"Неверный telegram_id: {telegram_id}")
             raise HTTPException(status_code=400, detail="Invalid telegram_id")
 
+        # ------------------------------------------------------------------
+        # 3. Время и запись сообщения
+        # ------------------------------------------------------------------
         astana_tz = pytz.timezone('Asia/Almaty')
         timestamp = datetime.now(astana_tz).isoformat()
-        
-        db_text = text if text else ""
-        # Убрали добавление "[Файл] {filename}" — имя теперь только в attachments, не в тексте
-        
+        db_text = text or ""
+
         cursor.execute(
-            "INSERT INTO messages (ticket_id, telegram_id, employee_telegram_id, text, is_from_bot, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            """INSERT INTO messages
+               (ticket_id, telegram_id, employee_telegram_id, text, is_from_bot, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?)""",
             (ticket_id, telegram_id, employee["telegram_id"], db_text, 1, timestamp)
         )
         message_id = cursor.lastrowid
 
-        file_path = None
-        file_name = None
-        file_type = None
-        if file and file.filename:
+        # ------------------------------------------------------------------
+        # 4. Сохранение файлов → attachments + сбор данных для очереди
+        # ------------------------------------------------------------------
+        attachments = []          # для SocketIO
+        file_paths   = []          # для queue_data
+
+        for file in files:                                 # теперь files всегда list
+            if not file or not file.filename:
+                continue
+
             logging.debug(f"Получен файл: {file.filename}, тип: {file.content_type}")
-            # Расширенная логика: MIME + fallback на extension для Ctrl+V без content_type
+
+            # ----- определение типа ------------------------------------
             extensions_image = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'}
-            ext = os.path.splitext(file.filename.lower())[1] if file.filename else ''
+            ext = os.path.splitext(file.filename.lower())[1]
             is_image_by_ext = ext in extensions_image
 
-            file_type = 'image' if (file.content_type and file.content_type.startswith('image/')) or is_image_by_ext else 'document'
+            file_type = ('image' if (file.content_type and file.content_type.startswith('image/'))
+                         or is_image_by_ext else 'document')
+
+            # ----- имя файла -------------------------------------------
             if file_type == 'image':
-                file_name = f"image_{int(time.time())}{ext if ext else '.png'}"
+                file_name = f"image_{int(time.time())}{ext or '.png'}"
             else:
                 file_name = file.filename or 'document'
+
             file_name = get_unique_filename(file_name, directory="Uploads")
             file_path = f"Uploads/{file_name}"
+
+            # ----- сохранение -----------------------------------------
             try:
                 os.makedirs("Uploads", exist_ok=True)
                 with open(file_path, "wb") as f:
                     f.write(await file.read())
-                logging.debug(f"Файл сохранен: {file_path}")
                 if not os.path.exists(file_path):
-                    logging.error(f"Файл не найден после сохранения: {file_path}")
                     raise HTTPException(status_code=500, detail="File not found after saving")
+
                 cursor.execute(
-                    "INSERT INTO attachments (message_id, file_path, file_name, file_type) VALUES (?, ?, ?, ?)",
+                    """INSERT INTO attachments
+                       (message_id, file_path, file_name, file_type)
+                       VALUES (?, ?, ?, ?)""",
                     (message_id, file_path, file_name, file_type)
                 )
-            except PermissionError as e:
-                logging.error(f"Ошибка прав доступа при сохранении файла: {e}")
-                conn.close()
-                raise HTTPException(status_code=500, detail="Permission denied when saving file")
-            except Exception as e:
-                logging.error(f"Ошибка при сохранении файла: {e}")
-                conn.close()
-                raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
+                attachments.append({
+                    "file_path": file_path,
+                    "file_name": file_name,
+                    "file_type": file_type
+                })
+                file_paths.append({"path": file_path, "type": file_type})
+
+            except PermissionError as e:
+                conn.close()
+                logging.error(f"PermissionError: {e}")
+                raise HTTPException(status_code=500, detail="Permission denied")
+            except Exception as e:
+                conn.close()
+                logging.error(f"Save error: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
+
+        # ------------------------------------------------------------------
+        # 5. Обновление issue_type (если пришло)
+        # ------------------------------------------------------------------
         if issue_type in ["tech", "org", "ins", "n/a"]:
             db_issue_type = None if issue_type == "n/a" else issue_type
             cursor.execute(
@@ -930,47 +973,52 @@ async def send_message(
                 "issue_type": db_issue_type
             })
 
+        # ------------------------------------------------------------------
+        # 6. Коммит и закрытие БД
+        # ------------------------------------------------------------------
         conn.commit()
         conn.close()
-        logging.debug(f"Сообщение сохранено в базе данных: ticket_id={ticket_id}")
+        logging.debug(f"Сообщение сохранено: ticket_id={ticket_id}")
 
+        # ------------------------------------------------------------------
+        # 7. Проверка event-loop
+        # ------------------------------------------------------------------
         if loop is None:
-            logging.error("Цикл событий не инициализирован")
             raise HTTPException(status_code=500, detail="Event loop not initialized")
 
-        telegram_text = text if text else ""
+        # ------------------------------------------------------------------
+        # 8. Формируем запись для очереди
+        # ------------------------------------------------------------------
         queue_data = {
             "telegram_id": telegram_id,
-            "text": telegram_text,
+            "text": db_text,
             "message_id": message_id
         }
-        if file_path:
-            queue_data["file_path"] = file_path
-            queue_data["file_type"] = file_type
-        logging.debug(f"Добавляем в очередь: {queue_data}")
+        if file_paths:
+            queue_data["files"] = file_paths
+
+        logging.debug(f"В очередь: {queue_data}")
         await message_queue.put(queue_data)
-        logging.debug(f"Сообщение добавлено в очередь")
 
-        logging.debug(f"Отправляем уведомление через SocketIO для ticket_id={ticket_id}")
-        attachments = []
-        if file_path:
-            attachments = [{"file_path": file_path, "file_name": file_name, "file_type": file_type}]
-
+        # ------------------------------------------------------------------
+        # 9. SocketIO-уведомление в веб-клиент
+        # ------------------------------------------------------------------
         await sio.emit("new_message", {
             "ticket_id": ticket_id,
             "telegram_id": telegram_id,
-            "text": db_text,  # Чистый текст
+            "text": db_text,
             "is_from_bot": True,
             "timestamp": timestamp,
             "login": employee["login"],
-            "attachments": attachments,  # <-- Добавь это — унифицирует с main.py
+            "attachments": attachments,
             "message_id": message_id
         })
-        logging.debug("Уведомление через SocketIO отправлено")
+        logging.debug("SocketIO new_message отправлен")
 
         return {"status": "ok"}
+
     except Exception as e:
-        logging.error(f"Ошибка при отправке сообщения: {e}")
+        logging.error(f"send_message error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/delete_message")

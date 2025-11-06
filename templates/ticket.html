@@ -526,6 +526,7 @@
                                                 onclick="openImageModal('/{{ att.file_path|e }}')">
                                         {% else %}
                                             <a href="/{{ att.file_path|e }}" 
+                                            target="_blank"
                                             class="inline-block text-blue-500 underline">
                                             {{ shorten_filename(att.file_name)|e }}
                                             </a>
@@ -547,7 +548,7 @@
                         rows="3"></textarea>
                 </div>
                 <div class="flex space-x-2">
-                    <input type="file" name="file" id="file-input" accept="image/*,.pdf,.txt,.log" class="hidden">
+                    <input type="file" name="file" id="file-input" accept="image/*,.pdf,.txt,.log" class="hidden" multiple>
                     <button type="button" id="attach-file-btn" class="p-2 border rounded bg-gray-200">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6">
@@ -1361,20 +1362,58 @@
             });
 
             // Bind event listeners to buttons and forms
-            document.getElementById('send-message-form').addEventListener('submit', (e) => {
+            document.getElementById('send-message-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
-                sendMessage(e.target);
+
+                const text = document.getElementById('message-input').value.trim();
+                if (!text && pendingFiles.length === 0) {
+                    return; // Пусто — не отправляем
+                }
+
+                const formData = new FormData();
+                formData.append('ticket_id', '{{ ticket_id }}');
+                formData.append('telegram_id', '{{ telegram_id }}');
+                formData.append('issue_type', document.getElementById('issue-type-select').value);
+                formData.append('text', text); // ← Явно добавляем текст
+
+                // Добавляем ВСЕ файлы из pendingFiles
+                pendingFiles.forEach(file => {
+                    formData.append('files', file);
+                });
+
+                try {
+                    const response = await fetch('/send_message', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        const err = await response.text();
+                        throw new Error(`HTTP ${response.status}: ${err}`);
+                    }
+
+                    const data = await response.json();
+                    if (data.status === 'ok') {
+                        e.target.reset();
+                        document.getElementById('message-input').value = ''; // Очистка textarea
+                        clearPreviews();
+                        scrollToBottom();
+                    } else {
+                        showNotification('Ошибка: ' + (data.message || ''), 'error');
+                    }
+                } catch (error) {
+                    console.error('send_message error:', error);
+                    showNotification('Не удалось отправить: ' + error.message, 'error');
+                }
             });
 
             document.getElementById('message-input').addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    const form = e.target.closest('form');
                     const text = e.target.value.trim();
-                    const fileInput = document.getElementById('file-input');
-                    const hasFile = fileInput.files && fileInput.files.length > 0;
-                    if (text || hasFile) {
-                        sendMessage(form);
+                    if (text || pendingFiles.length > 0) {
+                        // Просто отправляем форму — обработчик submit сделает всё
+                        document.getElementById('send-message-form').dispatchEvent(new Event('submit', { cancelable: true }));
                     }
                 }
             });
@@ -1595,58 +1634,15 @@
             });
 
             document.getElementById('message-input').addEventListener('paste', async (e) => {
-                const clipboardData = e.clipboardData || e.originalEvent.clipboardData;
-                const items = clipboardData.items;
-
+                const items = (e.clipboardData || e.originalEvent.clipboardData).items;
                 for (const item of items) {
                     if (item.type.startsWith('image/')) {
                         e.preventDefault();
                         const file = item.getAsFile();
-                        const formData = new FormData();
-                        formData.append('ticket_id', '{{ ticket_id }}');
-                        formData.append('telegram_id', '{{ telegram_id }}');
-                        const inputText = document.getElementById('message-input').value;
-                        formData.append('text', inputText);
-                        formData.append('file', file, `screenshot-${Date.now()}.png`);
-                        formData.append('issue_type', document.getElementById('issue-type-select').value);
-
-                        // Показать превью сразу
-                        const messageFormDiv = document.querySelector('#send-message-form > div.flex-grow');
-                        const existingPreview = messageFormDiv.querySelector('.preview-container');
-                        if (existingPreview) existingPreview.remove();
-                        const previewDiv = document.createElement('div');
-                        previewDiv.className = 'preview-container';
-                        const img = document.createElement('img');
-                        img.className = 'preview-image';
-                        img.src = URL.createObjectURL(file);
-                        previewDiv.appendChild(img);
-                        const removeBtn = document.createElement('span');
-                        removeBtn.className = 'preview-remove';
-                        removeBtn.textContent = '×';
-                        removeBtn.onclick = () => {
-                            previewDiv.remove();
-                        };
-                        previewDiv.appendChild(removeBtn);
-                        messageFormDiv.appendChild(previewDiv);
-
-                        try {
-                            const response = await fetch('/send_message', {
-                                method: 'POST',
-                                body: formData
-                            });
-                            if (!response.ok) {
-                                throw new Error(`HTTP error! status: ${response.status}`);
-                            }
-                            const data = await response.json();
-                            if (data.status === 'ok') {
-                                e.target.reset();
-                                clearPreviews();
-                            } else {
-                                showNotification('Не удалось отправить сообщение: ' + data.message, 'error');
-                            }
-                        } catch (error) {
-                            console.error('Ошибка отправки:', error);
-                            showNotification('Не удалось отправить сообщение (проверьте сеть или сервер)', 'error');
+                        const renamedFile = new File([file], `paste-${Date.now()}.png`, { type: file.type });
+                        if (!pendingFiles.some(f => f.name === renamedFile.name && f.size === renamedFile.size)) {
+                            pendingFiles.push(renamedFile);
+                            addPreview(renamedFile);
                         }
                         return;
                     }
@@ -1870,8 +1866,58 @@
             }
         });
 
+        let pendingFiles = [];
+
+        function addPreview(file) {
+            const messageFormDiv = document.querySelector('#send-message-form > div.flex-grow');
+            const previewContainer = messageFormDiv.querySelector('.previews-container') || document.createElement('div');
+            previewContainer.className = 'previews-container flex flex-wrap gap-2 mt-2';
+            if (!messageFormDiv.querySelector('.previews-container')) {
+                messageFormDiv.appendChild(previewContainer);
+            }
+
+            const previewDiv = document.createElement('div');
+            previewDiv.className = 'preview-container flex items-center gap-2 p-2 border border-gray-300 rounded';
+
+            if (file.type.startsWith('image/')) {
+                const img = document.createElement('img');
+                img.className = 'preview-image h-16 w-16 object-contain';
+                img.src = URL.createObjectURL(file);
+                previewDiv.appendChild(img);
+            } else {
+                const fileNameSpan = document.createElement('span');
+                fileNameSpan.className = 'preview-file-name';
+                fileNameSpan.textContent = file.name;
+                previewDiv.appendChild(fileNameSpan);
+            }
+
+            const removeBtn = document.createElement('span');
+            removeBtn.className = 'preview-remove cursor-pointer text-red-500 font-bold';
+            removeBtn.textContent = '×';
+            removeBtn.onclick = () => {
+                pendingFiles = pendingFiles.filter(f => f !== file);
+                previewDiv.remove();
+                if (pendingFiles.length === 0) previewContainer.remove();
+            };
+            previewDiv.appendChild(removeBtn);
+
+            previewContainer.appendChild(previewDiv);
+        }
+
+        document.getElementById('file-input').addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            files.forEach(file => {
+                if (!pendingFiles.some(f => f.name === file.name && f.size === file.size)) {
+                    pendingFiles.push(file);
+                    addPreview(file);
+                }
+            });
+            e.target.value = ''; // Сбрасываем input
+        });
+
         function clearPreviews() {
-            const previews = document.querySelectorAll('.preview-container');
+            pendingFiles = [];
+            const previews = document.querySelectorAll('.previews-container');
             previews.forEach(preview => preview.remove());
         }
 

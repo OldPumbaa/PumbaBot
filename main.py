@@ -2,7 +2,7 @@ import asyncio
 import uvicorn
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, BaseFilter
-from aiogram.types import Message, ContentType, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, ContentType, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto, InputMediaDocument
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from app import app, sio, message_queue, set_event_loop, send_notification_to_topic, get_setting
@@ -1115,102 +1115,92 @@ async def handle_rating(callback: CallbackQuery):
         conn.close()
 
 async def process_message_queue():
-    logging.debug("Запущена обработка очереди сообщений")
     while True:
         try:
-            logging.debug("Ожидаем сообщение в очереди...")
             data = await message_queue.get()
             telegram_id = data["telegram_id"]
             text = data["text"]
-            file_path = data.get("file_path")
-            file_type = data.get("file_type")
+            files = data.get("files", [])  # список: [{"path": ..., "type": "image" или "document"}]
             message_id = data.get("message_id")
-            telegram_message_id = data.get("telegram_message_id")
-            ticket_id = data.get("ticket_id")  # Extract ticket_id
-            logging.debug(f"Получено сообщение из очереди: telegram_id={telegram_id}, text={text}, file={file_path}, message_id={message_id}, telegram_message_id={telegram_message_id}, ticket_id={ticket_id}")
-            
+            ticket_id = data.get("ticket_id")
+
             telegram_message = None
-            try:
-                if telegram_message_id:
-                    logging.debug(f"Редактирование сообщения telegram_message_id={telegram_message_id}")
-                    conn = sqlite3.connect("support.db", timeout=10)
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT file_type FROM attachments WHERE message_id = ?", (message_id,))
-                    attachment = cursor.fetchone()
-                    conn.close()
-                    
-                    if attachment and attachment["file_type"] in ["image", "document"]:
-                        await bot.edit_message_caption(
+
+            if files:
+                # Разделяем по типу
+                images = [f for f in files if f["type"] == "image"]
+                documents = [f for f in files if f["type"] == "document"]
+
+                # --- 1. Отправляем изображения (если есть) ---
+                if images:
+                    if len(images) == 1:
+                        file = FSInputFile(path=images[0]["path"])
+                        telegram_message = await bot.send_photo(
                             chat_id=telegram_id,
-                            message_id=telegram_message_id,
-                            caption=text
+                            photo=file,
+                            caption=text  # caption только на первом
                         )
                     else:
-                        await bot.edit_message_text(
+                        media = []
+                        for idx, f in enumerate(images):
+                            file = FSInputFile(path=f["path"])
+                            caption = text if idx == 0 else None
+                            media.append(InputMediaPhoto(media=file, caption=caption))
+                        msgs = await bot.send_media_group(chat_id=telegram_id, media=media)
+                        telegram_message = msgs[0]
+
+                # --- 2. Отправляем документы (если есть) ---
+                if documents:
+                    if len(documents) == 1:
+                        file = FSInputFile(path=documents[0]["path"])
+                        caption = text if not images else ""  # caption только если нет фото
+                        msg = await bot.send_document(
                             chat_id=telegram_id,
-                            message_id=telegram_message_id,
-                            text=text
+                            document=file,
+                            caption=caption
                         )
-                    logging.debug(f"Сообщение telegram_message_id={telegram_message_id} отредактировано в Telegram")
+                        telegram_message = msg  # обновляем, если это последнее
+                    else:
+                        media = []
+                        for idx, f in enumerate(documents):
+                            file = FSInputFile(path=f["path"])
+                            caption = text if idx == 0 and not images else None
+                            media.append(InputMediaDocument(media=file, caption=caption))
+                        msgs = await bot.send_media_group(chat_id=telegram_id, media=media)
+                        telegram_message = msgs[0]
+
+            else:
+                # Нет файлов — обычная отправка
+                if ticket_id and "ваше обращение закрыто" in text.lower():
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="👍", callback_data=f"rate_{ticket_id}_up"),
+                         InlineKeyboardButton(text="👎", callback_data=f"rate_{ticket_id}_down")]
+                    ])
+                    telegram_message = await bot.send_message(
+                        chat_id=telegram_id,
+                        text=text,
+                        reply_markup=keyboard
+                    )
                 else:
-                    if file_path and file_type:
-                        if not os.path.exists(file_path):
-                            logging.error(f"Файл не найден: {file_path}")
-                            raise FileNotFoundError(f"File not found: {file_path}")
-                        logging.debug(f"Отправка файла: {file_path}, тип: {file_type}")
-                        file = FSInputFile(path=file_path)
-                        if file_type == 'image':
-                            telegram_message = await bot.send_photo(
-                                chat_id=telegram_id,
-                                photo=file,
-                                caption=text
-                            )
-                        else:
-                            telegram_message = await bot.send_document(
-                                chat_id=telegram_id,
-                                document=file,
-                                caption=text
-                            )
-                    else:
-                        if ticket_id and "ваше обращение закрыто. вы можете оценить работу техподдержки ниже." in text.lower():
-                            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                                [
-                                    InlineKeyboardButton(text="👍", callback_data=f"rate_{ticket_id}_up"),
-                                    InlineKeyboardButton(text="👎", callback_data=f"rate_{ticket_id}_down")
-                                ]
-                            ])
-                            telegram_message = await bot.send_message(
-                                chat_id=telegram_id,
-                                text=text,
-                                reply_markup=keyboard
-                            )
-                            logging.debug(f"Sent closure message with rating buttons for ticket_id={ticket_id}")
-                        else:
-                            telegram_message = await bot.send_message(chat_id=telegram_id, text=text)
-                
-                    if telegram_message and message_id:
-                        conn = sqlite3.connect("support.db", timeout=10)
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            "UPDATE messages SET telegram_message_id = ? WHERE message_id = ?",
-                            (telegram_message.message_id, message_id)
-                        )
-                        conn.commit()
-                        conn.close()
-                        logging.debug(f"Сохранён telegram_message_id={telegram_message.message_id} для message_id={message_id}")
-                
-                logging.debug(f"Сообщение отправлено/отредактировано пользователю {telegram_id}: {text}")
-            except Exception as e:
-                logging.error(f"Ошибка при отправке/редактировании сообщения в Telegram: {e}")
-                with open("error_log.txt", "a") as f:
-                    f.write(f"[{datetime.now()}] Ошибка обработки {telegram_id}: {e}\n")
-            finally:
-                message_queue.task_done()
+                    telegram_message = await bot.send_message(chat_id=telegram_id, text=text)
+
+            # Сохраняем telegram_message_id (только для последнего сообщения)
+            if telegram_message and message_id:
+                conn = sqlite3.connect("support.db", timeout=10)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE messages SET telegram_message_id = ? WHERE message_id = ?",
+                    (telegram_message.message_id, message_id)
+                )
+                conn.commit()
+                conn.close()
+
         except Exception as e:
-            logging.error(f"Ошибка в обработке очереди: {e}")
+            logging.error(f"Ошибка в process_message_queue: {e}")
             with open("error_log.txt", "a") as f:
-                f.write(f"[{datetime.now()}] Ошибка очереди: {e}\n")
+                f.write(f"[{datetime.now()}] Ошибка: {e}\n")
+        finally:
+            message_queue.task_done()
         await asyncio.sleep(0.1)
 
 async def cleanup_expired():
