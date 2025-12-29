@@ -647,6 +647,17 @@ async def ticket(request: Request, ticket_id: int, employee: dict = Depends(get_
             })
 
     messages = list(messages_dict.values())
+    
+    # Обработка переносов строк: заменяем \n на <br> для корректного отображения в HTML
+    from html import escape as html_escape
+    from markupsafe import Markup
+    for message in messages:
+        if message["text"]:
+            # 1. Экранируем HTML специальные символы (&, <, >, ", ')
+            # 2. Заменяем \n на <br>
+            # 3. Помечаем как безопасный HTML для Jinja2
+            escaped_text = html_escape(str(message["text"]))
+            message["text"] = Markup(escaped_text.replace('\n', '<br>'))
 
     cursor.execute("""
         SELECT am.message_id, am.ticket_id, am.telegram_id, am.text, am.timestamp, e.login

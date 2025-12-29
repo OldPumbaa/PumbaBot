@@ -13,11 +13,13 @@
     <script src="/static/notifications.js"></script>
     <style>
         .message-text {
-            line-height: 1.6; /* Легкий интервал для читаемости, без пропусков */
+            line-height: 1.6; /* Легкий интервал для читаемости */
             white-space: normal; /* Убирает extra строки от \n, текст wrap'ится естественно */
             margin: 0;
             padding: 0.25rem 0.5rem;
             font-size: 0.875rem;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         .attachments-container {
@@ -513,8 +515,8 @@
                         </div>
                         {% endif %}
                         <div class="message-text-container">
-                            <p class="message-text bg-{{ 'blue-200' if message.is_from_bot else 'gray-200' }} px-2 rounded whitespace-pre-wrap">
-                                {{ message.login|e }}: {{ message.text|e }}
+                            <p class="message-text bg-{{ 'blue-200' if message.is_from_bot else 'gray-200' }} px-2 rounded">
+                                {{ message.login|e }}: {{ message.text|safe }}
                                 <span class="timestamp text-xs text-gray-500 block mt-1">{{ message.timestamp }}</span>
                                 {% if message.attachments %}
                                 <div class="attachments-container">
@@ -754,6 +756,11 @@
             return text.toString().replace(/[&<>"']/g, function(m) { return map[m]; });
         }
 
+        function formatTextWithLineBreaks(text) {
+            if (text == null) return '';
+            return escapeHtml(text).replace(/\n/g, '<br>');
+        }
+
         let displayedTicketIds = new Set([{{ ticket_id }}]);
         let renderedMessageIds = new Set();
         
@@ -823,8 +830,8 @@
                 ${actions}
                 <div class="message-text-container">
                     ${historyLabel}
-                    <p class="message-text bg-${isHistory ? 'yellow-200' : (isBot ? 'blue-200' : 'gray-200')} px-2 rounded whitespace-pre-wrap">
-                        ${escapeHtml(data.login || 'Unknown')}: ${escapeHtml(data.text || '')}
+                    <p class="message-text bg-${isHistory ? 'yellow-200' : (isBot ? 'blue-200' : 'gray-200')} px-2 rounded">
+                        ${escapeHtml(data.login || 'Unknown')}: ${formatTextWithLineBreaks(data.text || '')}
                         <span class="timestamp text-xs text-gray-500 block mt-1">${escapeHtml(formatTimestamp(data.timestamp) || 'N/A')}</span>
                         ${attachments}
                     </p>
