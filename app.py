@@ -1972,3 +1972,31 @@ async def toggle_notification(sid, data):
         "ticket_id": ticket_id,
         "enabled": enabled
     })
+
+@sio.event
+async def typing(sid, data):
+    """Обработка события печати сотрудника"""
+    ticket_id = data.get('ticket_id')
+    login = data.get('login')
+    logging.debug(f"Сотрудник {login} печатает в тикете #{ticket_id}")
+    
+    # Трансляция события всем подключённым клиентам кроме отправителя
+    await sio.emit('user_typing', {
+        "ticket_id": ticket_id,
+        "login": login,
+        "sid": sid
+    }, skip_sid=sid)
+
+@sio.event
+async def stop_typing(sid, data):
+    """Обработка события остановки печати"""
+    ticket_id = data.get('ticket_id')
+    login = data.get('login')
+    logging.debug(f"Сотрудник {login} перестал печатать в тикете #{ticket_id}")
+    
+    # Трансляция события всем подключённым клиентам кроме отправителя
+    await sio.emit('user_stop_typing', {
+        "ticket_id": ticket_id,
+        "login": login,
+        "sid": sid
+    }, skip_sid=sid)

@@ -171,6 +171,48 @@
             font-weight: bold;
         }
 
+        /* Стили для индикатора печати */
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.75rem;
+            color: #9ca3af;
+            padding: 0.5rem 0;
+            min-height: 1.25rem;
+        }
+
+        .typing-indicator.hidden {
+            display: none;
+        }
+
+        .typing-dot {
+            width: 0.375rem;
+            height: 0.375rem;
+            border-radius: 50%;
+            background-color: #9ca3af;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 60%, 100% {
+                transform: translateY(0);
+                opacity: 0.7;
+            }
+            30% {
+                transform: translateY(-0.5rem);
+                opacity: 1;
+            }
+        }
+
         @media (max-width: 768px) {
             .flex.justify-between.items-center.mb-4 {
                 flex-direction: column;
@@ -540,7 +582,15 @@
                         </div>
                     </div>
                 {% endfor %}
-        </div>
+                <!-- Индикатор печати внутри скролляемого контейнера -->
+                <div id="typing-indicator-container" class="px-4 typing-indicator hidden">
+                    <span id="typing-user-name" class="font-semibold"></span>&nbsp;печатает
+                    <span class="typing-dot"></span>
+                    <span class="typing-dot"></span>
+                    <span class="typing-dot"></span>
+                </div>
+            </div>
+            <!-- Индикатор печати -->
             <form id="send-message-form" class="p-3 border-t flex items-start gap-2" enctype="multipart/form-data">
                 <input type="hidden" name="ticket_id" value="{{ ticket_id }}">
                 <input type="hidden" name="telegram_id" value="{{ telegram_id }}">
@@ -1019,6 +1069,141 @@
             bindMessageActions();
             showNotification('Быстрый ответ добавлен', 'success');
         });
+
+        // Переменная для отслеживания таймаута прекращения печати
+        let typingTimeout;
+        let isUserTyping = false;
+        
+        // Map для отслеживания печатающих пользователей с таймаутами
+        let typingUsers = new Map();
+        
+        function updateTypingIndicator() {
+            if (typingUsers.size === 0) {
+                const typingContainer = document.getElementById('typing-indicator-container');
+                typingContainer.classList.add('hidden');
+                return;
+            }
+            
+            const typingContainer = document.getElementById('typing-indicator-container');
+            const typingUserName = document.getElementById('typing-user-name');
+            
+            // Если один печатает - показываем его имя
+            if (typingUsers.size === 1) {
+                const userName = Array.from(typingUsers.keys())[0];
+                typingUserName.textContent = userName;
+                typingContainer.classList.remove('hidden');
+            } else {
+                // Если несколько - показываем количество
+                typingUserName.textContent = `${typingUsers.size} сотр.`;
+                typingContainer.classList.remove('hidden');
+            }
+            
+            // Прокручиваем вниз, чтобы индикатор был видно
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Слушатель для события печати другого пользователя
+        socket.on('user_typing', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                const userName = data.login;
+                
+                // Если уже был таймаут для этого пользователя, отменяем его
+                if (typingUsers.has(userName)) {
+                    clearTimeout(typingUsers.get(userName).timeout);
+                }
+                
+                // Устанавливаем новый таймаут на 4 секунды
+                const timeout = setTimeout(() => {
+                    typingUsers.delete(userName);
+                    updateTypingIndicator();
+                }, 4000);
+                
+                // Сохраняем информацию о пользователе с таймаутом
+                typingUsers.set(userName, { timeout, timestamp: Date.now() });
+                
+                updateTypingIndicator();
+            }
+        });
+
+        // Слушатель для события прекращения печати
+        socket.on('user_stop_typing', (data) => {
+            if (data.ticket_id === {{ ticket_id }}) {
+                const userName = data.login;
+                
+                if (typingUsers.has(userName)) {
+                    clearTimeout(typingUsers.get(userName).timeout);
+                    typingUsers.delete(userName);
+                }
+                
+                updateTypingIndicator();
+            }
+        });
+
+        // Отслеживание печати текущего пользователя
+        const messageInput = document.getElementById('message-input');
+        let lastTypingEventTime = 0;
+        const TYPING_THROTTLE_MS = 1000; // Отправляем событие печати максимум раз в секунду
+        
+        messageInput.addEventListener('input', () => {
+            const text = messageInput.value.trim();
+            const now = Date.now();
+            
+            if (text.length > 0) {
+                // Отправляем typing событие с throttling
+                if (!isUserTyping || (now - lastTypingEventTime) >= TYPING_THROTTLE_MS) {
+                    isUserTyping = true;
+                    lastTypingEventTime = now;
+                    socket.emit('typing', {
+                        ticket_id: {{ ticket_id }},
+                        login: '{{ employee.login }}'
+                    });
+                }
+            } else if (text.length === 0 && isUserTyping) {
+                // Перестали печатать
+                isUserTyping = false;
+                socket.emit('stop_typing', {
+                    ticket_id: {{ ticket_id }},
+                    login: '{{ employee.login }}'
+                });
+            }
+        });
+
+        // Отправка stop_typing при отправке сообщения
+        const sendForm = document.getElementById('send-message-form');
+        if (sendForm) {
+            const originalSubmit = sendForm.onsubmit;
+            sendForm.addEventListener('submit', function() {
+                if (isUserTyping) {
+                    isUserTyping = false;
+                    socket.emit('stop_typing', {
+                        ticket_id: {{ ticket_id }},
+                        login: '{{ employee.login }}'
+                    });
+                }
+            });
+        }
+        
+        // Периодическая проверка и очистка мёртвых typing пользователей
+        setInterval(() => {
+            const now = Date.now();
+            const DEAD_TIME = 5000; // 5 секунд - если дольше не обновлялось, удаляем
+            
+            for (let [userName, data] of typingUsers.entries()) {
+                if (now - data.timestamp > DEAD_TIME) {
+                    clearTimeout(data.timeout);
+                    typingUsers.delete(userName);
+                }
+            }
+            
+            // Обновляем индикатор если что-то изменилось
+            if (typingUsers.size === 0) {
+                const typingContainer = document.getElementById('typing-indicator-container');
+                if (!typingContainer.classList.contains('hidden')) {
+                    typingContainer.classList.add('hidden');
+                }
+            }
+        }, 2000);
 
         function showNotification(message, type) {
             const notification = document.createElement('div');
