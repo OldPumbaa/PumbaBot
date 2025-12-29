@@ -1124,6 +1124,14 @@ async def edit_message(
             conn.close()
             logging.error(f"Сообщение message_id={message_id} не от бота, редактирование запрещено")
             raise HTTPException(status_code=403, detail="Can only edit bot messages")
+        
+        # Загружаем вложения для сообщения
+        cursor.execute(
+            "SELECT file_path, file_name, file_type FROM attachments WHERE message_id = ?",
+            (message_id,)
+        )
+        attachments = cursor.fetchall()
+        attachments_list = [dict(att) for att in attachments] if attachments else []
 
         cursor.execute(
             "UPDATE messages SET text = ? WHERE message_id = ?",
@@ -1159,7 +1167,8 @@ async def edit_message(
             "timestamp": message["timestamp"],
             "telegram_id": message["telegram_id"],
             "login": employee["login"],
-            "is_from_bot": True
+            "is_from_bot": True,
+            "attachments": attachments_list
         })
         logging.debug(f"Событие message_edited отправлено для message_id={message_id}")
 
